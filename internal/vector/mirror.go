@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // refreshWatermarkKey is the metadata-table key holding the source-defined

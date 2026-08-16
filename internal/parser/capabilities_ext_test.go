@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/parsertest"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parsertest"
 )
 
 func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {

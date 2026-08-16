@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/db"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 var (

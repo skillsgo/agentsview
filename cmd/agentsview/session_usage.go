@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/service"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}

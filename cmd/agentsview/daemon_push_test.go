@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/server"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/server"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestParseDaemonPushSSE(t *testing.T) {

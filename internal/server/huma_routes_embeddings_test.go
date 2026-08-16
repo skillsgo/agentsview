@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/skillsgo/agentsview/internal/vector"
 )
 
 // activateCall records one Activate or Retire invocation on

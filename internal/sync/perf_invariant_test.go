@@ -10,8 +10,8 @@ import (
 	gosync "sync"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

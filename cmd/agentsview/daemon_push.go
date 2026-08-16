@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/server"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/server"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 type daemonPushRequest struct {

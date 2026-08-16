@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 const maxEndpointResponseBytes int64 = 2_000_000

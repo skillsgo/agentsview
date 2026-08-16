@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/parser"
+	pricingpkg "github.com/skillsgo/agentsview/internal/pricing"
 )
 
 // CopilotReportedCostSource identifies the authoritative cumulative cost

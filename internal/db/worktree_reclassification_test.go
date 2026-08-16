@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"

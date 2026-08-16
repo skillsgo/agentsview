@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/insight"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/insight"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/timeutil"
 )
 
 var validInsightTypes = map[string]bool{

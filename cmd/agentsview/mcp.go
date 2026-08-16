@@ -17,10 +17,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	mcpserver "go.kenn.io/agentsview/internal/mcp"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	mcpserver "github.com/skillsgo/agentsview/internal/mcp"
+	"github.com/skillsgo/agentsview/internal/service"
 )
 
 func newMCPCommand() *cobra.Command {

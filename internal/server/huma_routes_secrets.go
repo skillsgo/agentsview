@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/service"
 )
 
 func (s *Server) registerSecretsRoutes() {

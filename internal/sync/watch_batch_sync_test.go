@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestValidateWatchBatchRejectsMalformedScope(t *testing.T) {

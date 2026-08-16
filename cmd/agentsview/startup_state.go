@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // startupStateFileName is the data-dir file holding the starting

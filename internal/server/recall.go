@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	recallextract "go.kenn.io/agentsview/internal/recall/extract"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	recallextract "github.com/skillsgo/agentsview/internal/recall/extract"
+	"github.com/skillsgo/agentsview/internal/service"
 )
 
 func handleContextError(w http.ResponseWriter, err error) bool {

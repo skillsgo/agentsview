@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/sync"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sync"
 )
 
 func newSessionSyncCommand() *cobra.Command {

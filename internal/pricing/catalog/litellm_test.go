@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestParseLiteLLMPricingBandsNormalizesSupportedThresholdFields(t *testing.T) {

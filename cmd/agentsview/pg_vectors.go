@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/postgres"
 )
 
 func newPGVectorsCommand() *cobra.Command {

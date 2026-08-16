@@ -9,7 +9,7 @@ import (
 	"errors"
 	"io"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // ErrSearchUnavailable is returned by Search when the backing store has

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"github.com/skillsgo/agentsview/internal/pricing/catalog"
 )
 
 const fallbackVersionUnknown = "0"

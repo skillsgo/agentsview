@@ -1861,7 +1861,7 @@ description: Release history for AgentsView
   [`github.com/kenn-io/agentsview`](https://github.com/kenn-io/agentsview),
   publish the container image at
   `ghcr.io/kenn-io/agentsview`, and adopt the
-  `go.kenn.io/agentsview` vanity Go module path. All
+  `github.com/skillsgo/agentsview` vanity Go module path. All
   references in the docs site have been updated to match.
 
 **Bug fixes**

@@ -21,7 +21,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // omnigent orchestrates other coding agents (Claude Code, Codex, OpenCode, ...)

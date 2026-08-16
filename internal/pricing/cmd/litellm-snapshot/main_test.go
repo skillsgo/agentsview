@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/pricing/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
 func TestAppendModelOverlay_FillsGaps(t *testing.T) {

@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/update"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/update"
 )
 
 type transportMode int

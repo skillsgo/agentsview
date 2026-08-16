@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/server"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/server"
 )
 
 func testBackendReadyConfig(ts *httptest.Server, token string) config.Config {

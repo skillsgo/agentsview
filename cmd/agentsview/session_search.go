@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/service"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/service"
 	"golang.org/x/term"
 )
 

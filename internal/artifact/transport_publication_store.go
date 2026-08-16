@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 type artifactPublicationAuthority interface {

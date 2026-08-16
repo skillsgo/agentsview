@@ -10,10 +10,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/sync"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
 )
 
 // parseDiffChangedCap caps the non-verbose changed-sessions

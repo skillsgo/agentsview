@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
 )
 
 type fakeRecallVectorSearcher struct {

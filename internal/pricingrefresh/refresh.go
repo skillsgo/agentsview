@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/pricing"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/pricing"
 )
 
 const (

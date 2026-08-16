@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/skillsgo/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/service"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func newSecretsCommand() *cobra.Command {

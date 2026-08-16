@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // SyncSessionWithSubagentsContext refreshes one session and the candidate

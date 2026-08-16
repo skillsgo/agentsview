@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func decodeManifestWithLimits(data []byte, limits artifactLimits) (manifest, error) {

@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 func syncLifecycleOutcome(ctx context.Context, err error) string {

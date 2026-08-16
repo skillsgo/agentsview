@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db/git"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/skillsgo/agentsview/internal/db/git"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/timeutil"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db

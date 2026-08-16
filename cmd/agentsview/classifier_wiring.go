@@ -3,8 +3,8 @@
 package main
 
 import (
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // applyClassifierConfig installs user-defined classifier

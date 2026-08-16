@@ -12,10 +12,10 @@ import (
 	"os"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/postgres"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
 )
 
 func newClassifierCommand() *cobra.Command {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 type PingInfo struct {

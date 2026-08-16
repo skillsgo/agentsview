@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // readOnlyDataSpy stubs the Store interface and returns

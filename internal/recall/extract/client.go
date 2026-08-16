@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 // ErrContextOverflow reports a prompt the server rejected as too large for

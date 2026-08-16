@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

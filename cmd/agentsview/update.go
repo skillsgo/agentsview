@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/update"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/update"
 )
 
 type UpdateConfig struct {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/insight"
+	"github.com/skillsgo/agentsview/internal/insight"
 )
 
 func TestDefaultInsightGenerateStreamUsesServerConfig(t *testing.T) {

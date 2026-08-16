@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // syncWorktreeMappings publishes worktree mapping metadata to the DuckDB

@@ -17,13 +17,13 @@ import (
 	stdsync "sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/ssh"
-	"go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/remotesync"
+	"github.com/skillsgo/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/ssh"
+	"github.com/skillsgo/agentsview/internal/sync"
 )
 
 // SyncConfig holds parsed CLI options for the sync command.

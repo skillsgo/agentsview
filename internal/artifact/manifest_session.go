@@ -1,6 +1,6 @@
 package artifact
 
-import "go.kenn.io/agentsview/internal/db"
+import "github.com/skillsgo/agentsview/internal/db"
 
 // manifestSession is the manifest wire representation of a session row. It is
 // deliberately a separate type from db.Session: manifest bytes feed content

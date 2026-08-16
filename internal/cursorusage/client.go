@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 const defaultBaseURL = "https://api.cursor.com"

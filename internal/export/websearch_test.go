@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 // Prices asserted against Anthropic's published web search fee of

@@ -27,11 +27,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/money"
-	postgresstore "go.kenn.io/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/db"
+	duckdbstore "github.com/skillsgo/agentsview/internal/duckdb"
+	"github.com/skillsgo/agentsview/internal/money"
+	postgresstore "github.com/skillsgo/agentsview/internal/postgres"
 )
 
 // parityDate is a calendar day safely in the past relative to any realistic

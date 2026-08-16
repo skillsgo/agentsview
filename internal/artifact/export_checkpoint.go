@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 type artifactCheckpointSequenceDB interface {

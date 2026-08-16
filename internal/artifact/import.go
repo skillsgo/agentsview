@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 const artifactImportDrainLimit = 128

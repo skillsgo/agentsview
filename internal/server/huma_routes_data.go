@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func (s *Server) registerDataRoutes() {

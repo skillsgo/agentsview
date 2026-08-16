@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/parser"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {

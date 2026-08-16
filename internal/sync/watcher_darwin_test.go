@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/fsevents"
+	"github.com/skillsgo/agentsview/internal/fsevents"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

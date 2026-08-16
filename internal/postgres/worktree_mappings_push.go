@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 const worktreeMappingPublicationStateKey = "worktree_mapping_publication_revision_v2"

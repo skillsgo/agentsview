@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // resumeActiveWindow flags a session as in-flight when its last activity

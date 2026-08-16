@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/pathutil"
-	corerecall "go.kenn.io/agentsview/internal/recall"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/pathutil"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
+	"github.com/skillsgo/agentsview/internal/service"
 )
 
 func newRecallCommand() *cobra.Command {

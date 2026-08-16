@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 const (

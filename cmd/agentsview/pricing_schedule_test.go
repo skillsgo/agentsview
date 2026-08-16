@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	agentsync "github.com/skillsgo/agentsview/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/dbtest"
-	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 // Resync may spend up to five seconds draining SQLite connections before a

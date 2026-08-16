@@ -5,7 +5,7 @@ package export
 import (
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // WebSearchRequestMicrodollars is what one Anthropic server-side web search

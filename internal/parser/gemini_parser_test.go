@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // newGeminiTestProvider builds a concrete geminiProvider for the given roots so

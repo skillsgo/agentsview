@@ -3,9 +3,9 @@
 package backendcontract
 
 import (
-	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
-	postgresstore "go.kenn.io/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/db"
+	duckdbstore "github.com/skillsgo/agentsview/internal/duckdb"
+	postgresstore "github.com/skillsgo/agentsview/internal/postgres"
 )
 
 var (

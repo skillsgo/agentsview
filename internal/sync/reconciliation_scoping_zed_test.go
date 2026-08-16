@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
 )
 
 // TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember pins the

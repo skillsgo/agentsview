@@ -1,8 +1,8 @@
 package server
 
 import (
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // settingsResponse is the JSON shape returned by GET /api/v1/settings.

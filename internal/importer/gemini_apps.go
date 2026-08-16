@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // ImportGeminiApps reads a Google Takeout Gemini Apps HTML export and upserts

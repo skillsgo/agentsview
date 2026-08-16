@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
 )
 
 // defaultEvalChunkChars is the rune-window size for splitting a flattened

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
 )
 
 const (

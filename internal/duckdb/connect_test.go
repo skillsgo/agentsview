@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 )
 
 func TestValidateQuackClientURL(t *testing.T) {

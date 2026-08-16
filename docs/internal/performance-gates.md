@@ -137,7 +137,7 @@ those defaults still compares identical workloads; do the same locally if you
 override them.
 
 Report identifiers are package-qualified benchmark names
-(`go.kenn.io/agentsview/internal/db.InsertMessagesBatch-18`) when the captured
+(`github.com/skillsgo/agentsview/internal/db.InsertMessagesBatch-18`) when the captured
 output carries `pkg:` metadata, falling back to the bare name when it does not
 (e.g. hand-trimmed captures). Do not mix captures with and without `pkg:` lines:
 the same benchmark would key differently and be treated as removed/new.

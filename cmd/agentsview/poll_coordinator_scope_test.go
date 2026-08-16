@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/parser"
+	agentsync "github.com/skillsgo/agentsview/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
-	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 // recordingProviderPollSyncer records ReconcileProviderRoots calls.

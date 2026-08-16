@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	_ "github.com/duckdb/duckdb-go/v2"
+	duckdbsync "github.com/skillsgo/agentsview/internal/duckdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
 func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {

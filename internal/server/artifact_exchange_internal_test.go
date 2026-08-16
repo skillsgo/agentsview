@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/artifact"
+	"github.com/skillsgo/agentsview/internal/artifact"
 )
 
 func TestArtifactExchangeRouteRequiresRunner(t *testing.T) {

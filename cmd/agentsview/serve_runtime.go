@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/server"
 )
 
 type serveRuntimeOptions struct {

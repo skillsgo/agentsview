@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/timeutil"
 )
 
 func (s *Server) registerAnalyticsRoutes() {

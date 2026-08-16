@@ -9,10 +9,10 @@ import (
 	"io"
 	"strings"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/service"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func newSessionGetCommand() *cobra.Command {

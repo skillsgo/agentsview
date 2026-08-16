@@ -7,8 +7,8 @@ import (
 	"log"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	"github.com/skillsgo/agentsview/internal/db"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
 )
 
 const (

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/vector"
 )
 
 // QueryEncodeFunc embeds a single query string into the generation's vector

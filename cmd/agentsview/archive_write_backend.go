@@ -11,13 +11,13 @@ import (
 	stdsync "sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/pricingrefresh"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	duckdbsync "github.com/skillsgo/agentsview/internal/duckdb"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/pricingrefresh"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 type archiveWriteBackend interface {

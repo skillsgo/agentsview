@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 const (

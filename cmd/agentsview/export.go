@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/export"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
 )
 
 const sessionExportCursorResetExitCode = 4

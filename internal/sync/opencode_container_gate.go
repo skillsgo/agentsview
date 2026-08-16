@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // The OpenCode-family providers fan one shared SQLite database into one

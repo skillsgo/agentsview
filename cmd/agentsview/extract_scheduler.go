@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"go.kenn.io/agentsview/internal/recall/extract"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/recall/extract"
+	"github.com/skillsgo/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/sync"
 )
 
 // extractDebounceInterval is the quiet period the scheduler waits, after the

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // ManifestEntry describes one regular file available for remote sync.

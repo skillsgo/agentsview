@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/pricing/catalog"
 )
 
 var defaultOutputPath = filepath.FromSlash(

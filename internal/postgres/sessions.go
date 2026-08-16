@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // Store wraps a PostgreSQL connection for read-only session
