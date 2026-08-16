@@ -1,2 +1,2 @@
-*
-!.gitignore
+# The generated fallback is committed in the SkillsGo fork so the repository
+# remains consumable as a Go module without a pre-build artifact restore step.
