@@ -10,7 +10,7 @@ import (
 	"runtime/trace"
 	"slices"
 
-	"go.kenn.io/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/pathutil"
 )
 
 // startSyncProfile starts whichever of the hidden --cpuprofile,

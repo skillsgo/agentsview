@@ -494,6 +494,13 @@ March 2026), which shares that same database. *Kilo (legacy)* is the legacy
 RooCode-derived VS Code extension that wrote per-task JSON under
 `kilocode.kilo-code/tasks/`.
 
+## Embedding the Go SDK
+
+The public `github.com/skillsgo/agentsview/sdk` package embeds local transcript
+sync, session/message queries, and skill analytics without starting an HTTP
+server. The embedding application owns the SQLite path and sync lifecycle.
+`CallCount` counts invocations; `SessionCount` counts distinct sessions.
+
 ## Filesystem Session Sync
 
 One primary AgentsView instance can ingest native agent session directories

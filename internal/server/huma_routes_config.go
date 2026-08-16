@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/shlex"
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 func (s *Server) registerConfigRoutes() {

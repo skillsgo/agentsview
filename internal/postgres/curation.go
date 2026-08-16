@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func lockPinnedMessagesSession(

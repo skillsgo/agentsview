@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/update"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/update"
 )
 
 func stubChecker(

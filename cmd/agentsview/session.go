@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/timeutil"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/pathutil"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 func newSessionCommand() *cobra.Command {

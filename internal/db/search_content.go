@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mattn/go-sqlite3"
-	"go.kenn.io/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/secrets"
 )
 
 // DefaultContentSearchLimit and MaxContentSearchLimit bound result pages.

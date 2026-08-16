@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // messageScopeFilter adapts the model/day/hour parts of an AnalyticsFilter into

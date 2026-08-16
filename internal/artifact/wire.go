@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // Artifact kinds. Each kind maps to a top-level directory in an artifact

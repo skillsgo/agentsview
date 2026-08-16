@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"

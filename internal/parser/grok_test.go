@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 func writeGrokFixtureFile(t *testing.T, path, body string) {

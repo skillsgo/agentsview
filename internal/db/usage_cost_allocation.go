@@ -3,8 +3,8 @@ package db
 import (
 	"sort"
 
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // usageCostAllocationKey is the daily usage breakdown granularity used when

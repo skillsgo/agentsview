@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 func TestValidateProviderOutcome_FreebuffException(t *testing.T) {

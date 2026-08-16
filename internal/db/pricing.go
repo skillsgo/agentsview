@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // ModelPricing holds per-model token pricing (per million tokens).

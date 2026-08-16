@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.kenn.io/agentsview/internal/fsevents"
+	"github.com/skillsgo/agentsview/internal/fsevents"
 )
 
 const (

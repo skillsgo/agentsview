@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/sync"
 )
 
 // remoteSourceSyncEngine is the scoped-sync surface the periodic remote pass

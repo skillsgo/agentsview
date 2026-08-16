@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"

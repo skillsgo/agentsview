@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // Ptr returns a pointer to v.

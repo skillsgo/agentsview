@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/skillsgo/agentsview/internal/vector"
 )
 
 // EmbeddingsManager is the subset of *vector.Manager's API the embeddings

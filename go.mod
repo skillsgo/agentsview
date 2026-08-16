@@ -1,4 +1,4 @@
-module go.kenn.io/agentsview
+module github.com/skillsgo/agentsview
 
 go 1.26.6
 

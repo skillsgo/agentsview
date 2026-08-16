@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 
 	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"

@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/remotesync"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/ssh"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/remotesync"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/ssh"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 func (s *Server) registerSyncRoutes() {

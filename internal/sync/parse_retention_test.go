@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // newWarmBenchEngine builds a small already-synced Claude archive and

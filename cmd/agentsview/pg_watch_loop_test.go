@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // newTestLoop wires a pushLoop with caller-controlled timers.

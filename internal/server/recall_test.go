@@ -17,13 +17,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	corerecall "go.kenn.io/agentsview/internal/recall"
-	recallextract "go.kenn.io/agentsview/internal/recall/extract"
-	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
+	recallextract "github.com/skillsgo/agentsview/internal/recall/extract"
+	"github.com/skillsgo/agentsview/internal/server"
+	"github.com/skillsgo/agentsview/internal/service"
 )
 
 type listRecallEntriesResponse struct {

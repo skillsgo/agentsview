@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 const worktreeCandidateExampleLimit = 10

@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"go.kenn.io/agentsview/internal/sessionwatch"
+	"github.com/skillsgo/agentsview/internal/sessionwatch"
 )
 
 // sessionMonitor returns a channel that ticks whenever the

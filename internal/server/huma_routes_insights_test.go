@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 func TestInsightGenerateOptionsMapsConfig(t *testing.T) {

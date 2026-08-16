@@ -14,10 +14,10 @@ import (
 	"unicode/utf16"
 
 	"github.com/google/shlex"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 // resumeRequest is the JSON body for POST /api/v1/sessions/{id}/resume.

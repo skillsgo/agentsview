@@ -1,6 +1,6 @@
 package server
 
-import "go.kenn.io/agentsview/internal/db"
+import "github.com/skillsgo/agentsview/internal/db"
 
 type worktreeMappingsResponse struct {
 	Machine      string                      `json:"machine"`

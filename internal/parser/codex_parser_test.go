@@ -10,10 +10,10 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func runCodexParserTest(t *testing.T, fileName, content string, includeExec bool) (*ParsedSession, []ParsedMessage) {

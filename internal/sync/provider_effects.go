@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // validateProviderOutcome rejects a provider parse outcome whose sessions,

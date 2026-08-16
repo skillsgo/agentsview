@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func (s *Server) registerActivityRoutes() {

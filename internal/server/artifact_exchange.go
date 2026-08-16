@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/artifact"
+	"github.com/skillsgo/agentsview/internal/artifact"
 )
 
 const artifactExchangeMaxBodyBytes = 1 << 20

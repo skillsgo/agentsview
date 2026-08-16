@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/pathutil"
 )
 
 func expandDataDir(cfg *Config) error {

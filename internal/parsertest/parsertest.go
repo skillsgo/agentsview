@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // StubAgentDefs appends defs to the parser registry for the duration

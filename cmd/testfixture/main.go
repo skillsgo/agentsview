@@ -10,10 +10,10 @@ import (
 	"os"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/db"
+	duckdbsync "github.com/skillsgo/agentsview/internal/duckdb"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 type sessionSpec struct {

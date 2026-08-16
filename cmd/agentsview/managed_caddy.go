@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 const managedCaddyStartGrace = 300 * time.Millisecond

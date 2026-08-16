@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/postgres"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 

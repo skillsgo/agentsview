@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/postgres"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
 )
 
 func newPGServiceCommand() *cobra.Command {

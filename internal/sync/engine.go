@@ -21,13 +21,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pathutil"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/signals"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/signals"
+	"github.com/skillsgo/agentsview/internal/timeutil"
 )
 
 const (

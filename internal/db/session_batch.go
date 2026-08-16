@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 // SessionBatchWrite is one full session rewrite for a bulk

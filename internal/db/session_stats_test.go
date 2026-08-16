@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 // itoa is a thin alias for strconv.Itoa kept short so seedModelMessages'

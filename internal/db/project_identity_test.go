@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {

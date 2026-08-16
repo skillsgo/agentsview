@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/skillsgo/agentsview/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func readConfigFile(t *testing.T, dir string) Config {

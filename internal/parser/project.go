@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 // osStat and osLstat are indirected through vars so tests can intercept

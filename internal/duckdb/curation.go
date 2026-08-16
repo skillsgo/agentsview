@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func (s *Store) StarSession(sessionID string) (bool, error) {

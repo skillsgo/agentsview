@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 	kitvec "go.kenn.io/kit/vector"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/vector"
 )
 
 // enabledVectorConfig returns a minimal Config with [vector] enabled and a

@@ -11,9 +11,9 @@ import (
 	"os"
 	"sync"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/vector"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/postgres"
+	"github.com/skillsgo/agentsview/internal/vector"
 )
 
 // vectorPushSource adapts a read-only vector.Index to

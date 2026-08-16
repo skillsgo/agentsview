@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 const quackAttachmentName = "agentsview_remote"

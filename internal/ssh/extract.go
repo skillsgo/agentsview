@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"go.kenn.io/agentsview/internal/remotesync"
+	"github.com/skillsgo/agentsview/internal/remotesync"
 )
 
 func extractTarStream(

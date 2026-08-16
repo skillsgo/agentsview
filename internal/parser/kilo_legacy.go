@@ -31,7 +31,7 @@ import (
 	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // kiloLegacyDefaultDirs returns the platform-specific default

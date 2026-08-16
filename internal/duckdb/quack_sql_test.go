@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {

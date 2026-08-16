@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // Params controls one range aggregation. RangeStart/RangeEnd are the resolved

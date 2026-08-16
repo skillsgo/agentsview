@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // GetProviderStatHash returns the per-component stat digest stored against

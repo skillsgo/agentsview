@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // supplementalVersion identifies the curated supplemental alias set.

@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 const sessionExportOrder = "last_activity_at DESC, id ASC"

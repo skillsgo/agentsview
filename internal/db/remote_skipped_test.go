@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/dbtest"
 )
 
 func TestRemoteSkippedFiles(t *testing.T) {

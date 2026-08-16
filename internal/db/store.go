@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 // ErrReadOnly is returned by write methods on read-only store

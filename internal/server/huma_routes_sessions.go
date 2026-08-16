@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sessionwatch"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/sessionwatch"
 )
 
 func (s *Server) registerSessionRoutes() {

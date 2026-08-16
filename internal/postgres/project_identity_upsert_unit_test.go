@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 func identityObs(

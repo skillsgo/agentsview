@@ -19,13 +19,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/secrets"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 )
 
 // directTestEnv is a lightweight environment helper for testing

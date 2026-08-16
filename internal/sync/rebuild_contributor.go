@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // ErrUnifiedRebuildAborted reports that the atomic local and HTTP rebuild was

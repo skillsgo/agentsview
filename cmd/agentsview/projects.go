@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}

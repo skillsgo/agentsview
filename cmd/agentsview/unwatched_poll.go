@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/server"
-	agentsync "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/server"
+	agentsync "github.com/skillsgo/agentsview/internal/sync"
 )
 
 var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")

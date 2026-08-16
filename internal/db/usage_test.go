@@ -18,12 +18,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/parsertest"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parsertest"
+	pricingpkg "github.com/skillsgo/agentsview/internal/pricing"
 )
 
 func TestDailyUsageAmountsPricingBandRequestScope(t *testing.T) {

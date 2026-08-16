@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/dbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // TestShutdownClosesOnDemandEngine guards the lifecycle of the

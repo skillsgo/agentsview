@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // serviceSpec is the resolved input for rendering a unit file.

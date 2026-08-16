@@ -6,14 +6,14 @@ import (
 	"os"
 	"time"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/pricingrefresh"
-	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/activity"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/pricing"
+	"github.com/skillsgo/agentsview/internal/pricingrefresh"
+	"github.com/skillsgo/agentsview/internal/service"
+	"github.com/skillsgo/agentsview/internal/sync"
 )
 
 type archiveQueryReadOnlyDaemonPolicy int

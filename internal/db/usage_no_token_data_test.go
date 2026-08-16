@@ -3,8 +3,8 @@ package db
 import (
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/money"
 	"github.com/stretchr/testify/assert"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestNoTokenData(t *testing.T) {

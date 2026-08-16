@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 func replacePGSessionAliases(

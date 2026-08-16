@@ -6,7 +6,7 @@ package export
 import (
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 const UsageDailySchemaVersion = 5

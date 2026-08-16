@@ -14,17 +14,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/cursorusage"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parsertest"
+	"github.com/skillsgo/agentsview/internal/pricingrefresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/cursorusage"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/parsertest"
-	"go.kenn.io/agentsview/internal/pricingrefresh"
 )
 
 var goldenFixtureNow = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)

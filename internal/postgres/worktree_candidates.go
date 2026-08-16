@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // ListArchiveWorktreeCandidates returns the machine/path groups for a

@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/db"
-	recall "go.kenn.io/agentsview/internal/recall"
-	"go.kenn.io/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/db"
+	recall "github.com/skillsgo/agentsview/internal/recall"
+	"github.com/skillsgo/agentsview/internal/secrets"
 )
 
 const (

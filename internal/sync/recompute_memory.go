@@ -3,7 +3,7 @@ package sync
 import (
 	"runtime/debug"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 const recomputeHeapReleaseDefaultThreshold = 256 << 20

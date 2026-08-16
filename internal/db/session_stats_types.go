@@ -1,6 +1,6 @@
 package db
 
-import "go.kenn.io/agentsview/internal/money"
+import "github.com/skillsgo/agentsview/internal/money"
 
 // SessionStats is the top-level v2 output of GetSessionStats.
 // schema_version is locked at 2. Additive fields (new keys that

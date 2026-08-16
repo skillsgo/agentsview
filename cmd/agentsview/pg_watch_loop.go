@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 // pushReason labels why a push was triggered, for logging.

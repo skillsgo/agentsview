@@ -9,8 +9,8 @@ import (
 	"io"
 	"text/tabwriter"
 
+	"github.com/skillsgo/agentsview/internal/service"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func newSessionToolCallsCommand() *cobra.Command {

@@ -1,8 +1,8 @@
 package sync
 
 import (
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/secrets"
 )
 
 // computeSignalsAndSecrets computes a session's signal update and its secret

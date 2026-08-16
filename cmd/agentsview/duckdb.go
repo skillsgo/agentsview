@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	duckdbsync "github.com/skillsgo/agentsview/internal/duckdb"
+	"github.com/skillsgo/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/server"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
-	"go.kenn.io/agentsview/internal/pathutil"
-	"go.kenn.io/agentsview/internal/server"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type DuckDBPushConfig struct {

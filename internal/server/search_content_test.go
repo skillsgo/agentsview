@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/config"
 )
 
 // TestHandleSearchContentInvalidParams covers the handler's request-validation

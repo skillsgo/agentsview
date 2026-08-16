@@ -12,8 +12,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/sessionwatch"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/skillsgo/agentsview/internal/sessionwatch"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 )
 
 // TestServerTimeouts starts a real HTTP server and verifies that

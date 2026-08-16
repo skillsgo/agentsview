@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	corerecall "go.kenn.io/agentsview/internal/recall"
+	corerecall "github.com/skillsgo/agentsview/internal/recall"
 )
 
 // Extraction generation states. A generation is one distillation

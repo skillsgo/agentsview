@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func newSessionExportCommand() *cobra.Command {

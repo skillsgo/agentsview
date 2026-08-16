@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skillsgo/agentsview/internal/dbtest"
+	"github.com/skillsgo/agentsview/internal/importer"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/importer"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 const geminiAppsCLIHTML = `<html><head><title>My Activity History</title></head><body><div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>cli prompt</p><p>cli answer</p></div></div></body></html>`

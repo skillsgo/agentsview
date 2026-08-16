@@ -24,9 +24,9 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/gofrs/flock"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/pathutil"
 	"github.com/spf13/pflag"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // TerminalConfig holds terminal launch preferences.

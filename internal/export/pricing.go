@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"github.com/skillsgo/agentsview/internal/money"
+	pricingpkg "github.com/skillsgo/agentsview/internal/pricing"
 )
 
 type PricingRowSource string

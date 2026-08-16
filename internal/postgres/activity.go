@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // GetSessionActivity returns time-bucketed message counts for a

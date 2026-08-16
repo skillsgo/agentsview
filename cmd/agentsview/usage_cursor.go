@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/cursorusage"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/cursorusage"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 var newCursorUsageClient = cursorusage.NewClient

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/money"
 )
 
 // CursorUsageEvent stores authoritative Cursor admin usage data.

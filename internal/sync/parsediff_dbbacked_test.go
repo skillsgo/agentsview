@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/sync"
 )
 
 // warpTestDB is a minimal Warp SQLite store for the sync test package,

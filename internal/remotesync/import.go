@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
+	syncpkg "github.com/skillsgo/agentsview/internal/sync"
 )
 
 func (im Importer) ImportExtracted(

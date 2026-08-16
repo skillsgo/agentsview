@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 )
 
 // Hot-path benchmarks for the sync engine, covering the regression

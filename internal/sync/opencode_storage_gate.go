@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // File-backed OpenCode-format sessions fan one session JSON plus its

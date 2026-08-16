@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 const (

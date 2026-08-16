@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/db"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func testSSHHost(t *testing.T) string {

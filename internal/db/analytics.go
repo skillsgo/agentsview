@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"go.kenn.io/agentsview/internal/signals"
+	"github.com/skillsgo/agentsview/internal/signals"
 )
 
 // maxSQLVars is the maximum bind variables per IN clause to stay

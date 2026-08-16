@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // gistResponse represents the relevant fields from GitHub's

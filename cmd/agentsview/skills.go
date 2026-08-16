@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	gitrepo "go.kenn.io/kit/git/repo"
 
-	"go.kenn.io/agentsview/internal/skills"
+	"github.com/skillsgo/agentsview/internal/skills"
 )
 
 // skillFileName is the file every harness's skill directory installs, as

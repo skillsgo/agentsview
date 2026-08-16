@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/remotesync"
+	"github.com/skillsgo/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/remotesync"
 )
 
 // buildTarCommand generates the remote shell script for the given

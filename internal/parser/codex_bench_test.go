@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 const (

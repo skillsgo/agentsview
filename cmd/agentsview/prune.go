@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // PruneConfig holds parsed CLI options for the prune command.

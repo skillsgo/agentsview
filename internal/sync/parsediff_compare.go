@@ -33,8 +33,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 // maxRenderedValueRunes caps rendered string values in FieldDiff;

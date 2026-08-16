@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/skillsgo/agentsview/internal/db"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func executeCommand(root *cobra.Command, args ...string) (string, error) {

@@ -3,7 +3,7 @@ package pricing
 import (
 	"context"
 
-	"go.kenn.io/agentsview/internal/pricing/catalog"
+	"github.com/skillsgo/agentsview/internal/pricing/catalog"
 )
 
 // ModelPricing holds per-model token pricing in cost per

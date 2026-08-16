@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/importer"
-	"go.kenn.io/agentsview/internal/pathutil"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/importer"
+	"github.com/skillsgo/agentsview/internal/pathutil"
 )
 
 type ImportConfig struct {

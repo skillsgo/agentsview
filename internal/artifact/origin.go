@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/db"
 )
 
 // EnsureOrigin returns the persisted origin ID, creating one when absent.

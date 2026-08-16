@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/export"
+	"github.com/skillsgo/agentsview/internal/export"
 )
 
 const ProjectIdentityBackfillName = "session_project_identity_snapshots_v1"

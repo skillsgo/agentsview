@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
+	"github.com/skillsgo/agentsview/internal/config"
+	"github.com/skillsgo/agentsview/internal/parser"
 )
 
 func ResolveTargets(cfg config.Config) TargetSet {

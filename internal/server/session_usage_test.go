@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/testjsonl"
+	"github.com/skillsgo/agentsview/internal/db"
+	"github.com/skillsgo/agentsview/internal/money"
+	"github.com/skillsgo/agentsview/internal/testjsonl"
 )
 
 func TestHandleSessionUsage_PricedSession(t *testing.T) {
