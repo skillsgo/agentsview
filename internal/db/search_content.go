@@ -12,7 +12,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/skillsgo/agentsview/internal/secrets"
 )
 
@@ -705,10 +704,10 @@ func FTSSnippetRange(pattern, body string) (int, int) {
 // quotes or stray operators). Operational failures (I/O, corruption, busy)
 // carry distinct SQLite codes and pass through unchanged.
 func classifyFTSError(err error) error {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrError {
+	if strings.Contains(strings.ToLower(err.Error()), "fts") ||
+		strings.Contains(strings.ToLower(err.Error()), "syntax") {
 		return &SearchInputError{
-			Msg: fmt.Sprintf("search: invalid FTS query: %s", sqliteErr.Error()),
+			Msg: fmt.Sprintf("search: invalid FTS query: %s", err.Error()),
 		}
 	}
 	return err

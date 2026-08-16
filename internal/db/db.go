@@ -1297,7 +1297,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 		return fmt.Errorf("upgrading database schema: %s is empty", path)
 	}
 
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	writer, err := sql.Open(sqliteDriverName, makeDSN(path, false))
 	if err != nil {
 		return fmt.Errorf("opening schema upgrade writer: %w", err)
 	}
@@ -1499,7 +1499,7 @@ var (
 
 func readOnlyRequiredSchema() (map[string][]string, error) {
 	readOnlyRequiredSchemaOnce.Do(func() {
-		conn, err := sql.Open("sqlite3", ":memory:")
+		conn, err := sql.Open(sqliteDriverName, ":memory:")
 		if err != nil {
 			readOnlyRequiredSchemaErr = fmt.Errorf(
 				"opening schema probe: %w", err,
@@ -1658,7 +1658,7 @@ func probeDatabase(
 			"checking database file: %w", err,
 		)
 	}
-	conn, err := sql.Open("sqlite3", makeDSN(path, true))
+	conn, err := sql.Open(sqliteDriverName, makeDSN(path, true))
 	if err != nil {
 		return false, false, fmt.Errorf(
 			"probing schema: %w", err,
@@ -3735,7 +3735,7 @@ func (db *DB) Vacuum() error {
 }
 
 func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	writer, err := sql.Open(sqliteDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening writer: %w", err)
 	}
@@ -4286,7 +4286,7 @@ func checkpointWALWithoutWriter(path string) error {
 		}
 		return fmt.Errorf("stat wal before final checkpoint: %w", err)
 	}
-	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	conn, err := sql.Open(sqliteDriverName, makeDSN(path, false))
 	if err != nil {
 		return fmt.Errorf("opening final checkpoint connection: %w", err)
 	}
@@ -4482,7 +4482,7 @@ func (db *DB) ReopenWriter() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	writer, err := sql.Open("sqlite3", makeDSN(db.path, false))
+	writer, err := sql.Open(sqliteDriverName, makeDSN(db.path, false))
 	if err != nil {
 		return fmt.Errorf("reopening writer: %w", err)
 	}
