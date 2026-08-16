@@ -1,3 +1,5 @@
+//go:build cgo
+
 package db
 
 import (
@@ -6,7 +8,10 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-const sqliteUsageDriverName = "agentsview_sqlite3"
+const (
+	sqliteDriverName      = "sqlite3"
+	sqliteUsageDriverName = "agentsview_sqlite3"
+)
 
 func init() {
 	sql.Register(sqliteUsageDriverName, &sqlite3.SQLiteDriver{

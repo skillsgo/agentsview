@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/skillsgo/agentsview/internal/parser"
 )
 
@@ -1167,7 +1166,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 }
 
 func isSQLiteUniqueConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) &&
-		sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") ||
+		strings.Contains(message, "constraint failed")
 }

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/mattn/go-sqlite3"
 )
 
 // Cache is a small TTL-backed key-value store for git aggregation results.
@@ -101,11 +99,8 @@ func (c *Cache) GetOrCompute(
 }
 
 func isMissingCacheTable(err error) bool {
-	var sqliteErr sqlite3.Error
-	if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrError {
-		return false
-	}
-	return strings.Contains(err.Error(), "no such table: git_cache")
+	return strings.Contains(strings.ToLower(err.Error()), "no such table") &&
+		strings.Contains(strings.ToLower(err.Error()), "git_cache")
 }
 
 // lookup returns (payload, true, nil) when a fresh row exists, (nil, false,
