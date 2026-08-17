@@ -3474,10 +3474,13 @@ func (e *Engine) setLastSyncStats(stats SyncStats) {
 	e.mu.Unlock()
 }
 
-// removeTempDB removes a temp database and its WAL/SHM files.
+// removeTempDB removes a temp archive, its isolated derived search database,
+// and both databases' WAL/SHM files.
 func removeTempDB(path string) {
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		os.Remove(path + suffix)
+	for _, databasePath := range []string{path, path + ".search.db"} {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			os.Remove(databasePath + suffix)
+		}
 	}
 }
 
