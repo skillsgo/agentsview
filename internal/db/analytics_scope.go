@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -58,18 +59,13 @@ func (db *DB) resolveAnalyticsMessageScope(
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
 
-	contentExpr := "''"
-	if includeContent {
-		contentExpr = "COALESCE(content, '')"
-	}
-
 	if err := queryChunked(unique, func(chunk []string) error {
 		reducer := NewScopeReducer(flt, emit)
 		ph, args := inPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT session_id, ordinal, role, is_system, COALESCE(model, ''),
 				has_thinking, has_tool_use, COALESCE(timestamp, ''),
-				output_tokens, has_output_tokens, content_length, `+contentExpr+`
+				output_tokens, has_output_tokens, content_length, content_object_id
 			FROM messages
 			WHERE session_id IN `+ph+`
 			ORDER BY session_id, ordinal`,
@@ -78,23 +74,29 @@ func (db *DB) resolveAnalyticsMessageScope(
 		if err != nil {
 			return fmt.Errorf("querying analytics candidate messages: %w", err)
 		}
-		defer rows.Close()
-
+		type storedScopeRow struct {
+			input    MessageInput
+			objectID sql.NullInt64
+		}
+		var stored []storedScopeRow
+		var objectIDs []int64
 		for rows.Next() {
 			var (
-				sessionID, role, model, ts, content                string
+				row                                                storedScopeRow
+				sessionID, role, model, ts                         string
 				ordinal, outputTokens, contentLength               int
 				isSystem, hasThinking, hasToolUse, hasOutputTokens bool
 			)
 			if err := rows.Scan(
 				&sessionID, &ordinal, &role, &isSystem, &model,
 				&hasThinking, &hasToolUse, &ts, &outputTokens,
-				&hasOutputTokens, &contentLength, &content,
+				&hasOutputTokens, &contentLength, &row.objectID,
 			); err != nil {
+				_ = rows.Close()
 				return fmt.Errorf("scanning analytics candidate message: %w", err)
 			}
 			parsed, has := localTime(ts, loc)
-			if err := reducer.Push(MessageInput{
+			row.input = MessageInput{
 				SessionID:       sessionID,
 				Ordinal:         ordinal,
 				Role:            role,
@@ -108,13 +110,30 @@ func (db *DB) resolveAnalyticsMessageScope(
 				OutputTokens:    outputTokens,
 				HasOutputTokens: hasOutputTokens,
 				ContentLength:   contentLength,
-				Content:         content,
-			}); err != nil {
-				return err
+			}
+			stored = append(stored, row)
+			if includeContent && row.objectID.Valid {
+				objectIDs = append(objectIDs, row.objectID.Int64)
 			}
 		}
 		if err := rows.Err(); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("iterating analytics candidate messages: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing analytics candidate messages: %w", err)
+		}
+		contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+		if err != nil {
+			return err
+		}
+		for _, row := range stored {
+			if includeContent && row.objectID.Valid {
+				row.input.Content = contents[row.objectID.Int64]
+			}
+			if err := reducer.Push(row.input); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
