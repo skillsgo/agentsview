@@ -2244,14 +2244,12 @@ func appendMessage(t *testing.T, local *db.DB, sessionID string) {
 // exactly as it was: the fingerprint changes without the marker moving.
 func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
-			`UPDATE messages SET content = 'mutated content'
-			 WHERE session_id = ? AND ordinal = 0`,
-			sessionID,
-		)
-		return err
-	}))
+	messages, err := local.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	messages[0].Content = "mutated content"
+	messages[0].ContentLength = len(messages[0].Content)
+	require.NoError(t, local.ReplaceSessionMessages(sessionID, messages))
 }
 
 // setSessionSignalsTo forces sessionID's sync_marker directly, bypassing

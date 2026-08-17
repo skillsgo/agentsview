@@ -156,20 +156,34 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
   AND NOT EXISTS (
     SELECT 1
     FROM messages m
+    LEFT JOIN content_fts body ON body.rowid = m.content_object_id
+    LEFT JOIN content_fts thinking ON thinking.rowid = m.thinking_object_id
     JOIN screenshot_blocked_patterns p
       ON lower(
-        COALESCE(m.content, '') || char(10) ||
-        COALESCE(m.thinking_text, '')
+        COALESCE(body.content, '') || char(10) ||
+        COALESCE(thinking.content, '')
       ) LIKE p.pattern ESCAPE '\'
     WHERE m.session_id = s.id
   )
   AND NOT EXISTS (
     SELECT 1
+    FROM messages m
+    LEFT JOIN content_fts body ON body.rowid = m.content_object_id
+    LEFT JOIN content_fts thinking ON thinking.rowid = m.thinking_object_id
+    JOIN screenshot_redactions r
+      ON instr(COALESCE(body.content, '') || char(10) ||
+               COALESCE(thinking.content, ''), r.from_text) > 0
+    WHERE m.session_id = s.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
     FROM tool_calls tc
+    LEFT JOIN content_fts input_body ON input_body.rowid = tc.input_object_id
+    LEFT JOIN content_fts result_body ON result_body.rowid = tc.result_object_id
     JOIN screenshot_blocked_patterns p
       ON lower(
-        COALESCE(tc.input_json, '') || char(10) ||
-        COALESCE(tc.result_content, '') || char(10) ||
+        COALESCE(input_body.content, '') || char(10) ||
+        COALESCE(result_body.content, '') || char(10) ||
         COALESCE(tc.file_path, '') || char(10) ||
         COALESCE(tc.skill_name, '')
       ) LIKE p.pattern ESCAPE '\'
@@ -177,9 +191,28 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
   )
   AND NOT EXISTS (
     SELECT 1
+    FROM tool_calls tc
+    LEFT JOIN content_fts input_body ON input_body.rowid = tc.input_object_id
+    LEFT JOIN content_fts result_body ON result_body.rowid = tc.result_object_id
+    JOIN screenshot_redactions r
+      ON instr(COALESCE(input_body.content, '') || char(10) ||
+               COALESCE(result_body.content, ''), r.from_text) > 0
+    WHERE tc.session_id = s.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
     FROM tool_result_events tre
+    LEFT JOIN content_fts event_body ON event_body.rowid = tre.content_object_id
     JOIN screenshot_blocked_patterns p
-      ON lower(COALESCE(tre.content, '')) LIKE p.pattern ESCAPE '\'
+      ON lower(COALESCE(event_body.content, '')) LIKE p.pattern ESCAPE '\'
+    WHERE tre.session_id = s.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM tool_result_events tre
+    LEFT JOIN content_fts event_body ON event_body.rowid = tre.content_object_id
+    JOIN screenshot_redactions r
+      ON instr(COALESCE(event_body.content, ''), r.from_text) > 0
     WHERE tre.session_id = s.id
   );
 
@@ -230,25 +263,15 @@ WHERE COALESCE(s.parent_session_id, '') = ''
     SELECT 1
     FROM messages m
     WHERE m.session_id = s.id
-      AND COALESCE(m.thinking_text, '') != ''
+      AND m.thinking_object_id IS NOT NULL
   )
 ORDER BY (
   SELECT COUNT(*)
   FROM messages m
   WHERE m.session_id = s.id
-    AND COALESCE(m.thinking_text, '') != ''
+    AND m.thinking_object_id IS NOT NULL
 ) DESC, s.id
 LIMIT 1;
-
--- Drop FTS5 sync triggers before the bulk delete. Each
--- DELETE FROM messages otherwise fires messages_ad which
--- runs an FTS5 'delete' command, and that trips
--- "constraint failed (19)" at scale. We rebuild the FTS
--- index after the deletes and restore the triggers at
--- the end so the test DB still supports in-session search.
-DROP TRIGGER IF EXISTS messages_ai;
-DROP TRIGGER IF EXISTS messages_ad;
-DROP TRIGGER IF EXISTS messages_au;
 
 DELETE FROM tool_calls WHERE session_id IN (
   SELECT id FROM sessions
@@ -304,40 +327,9 @@ SET first_message = replace(first_message, r.from_text, r.to_text),
     file_path = replace(file_path, r.from_text, r.to_text)
 FROM screenshot_redactions r;
 
-UPDATE messages
-SET content = replace(content, r.from_text, r.to_text),
-    thinking_text = replace(thinking_text, r.from_text, r.to_text)
-FROM screenshot_redactions r;
-
 UPDATE tool_calls
-SET file_path = replace(file_path, r.from_text, r.to_text),
-    input_json = replace(input_json, r.from_text, r.to_text),
-    result_content = replace(result_content, r.from_text, r.to_text)
+SET file_path = replace(file_path, r.from_text, r.to_text)
 FROM screenshot_redactions r;
-
-UPDATE tool_result_events
-SET content = replace(content, r.from_text, r.to_text)
-FROM screenshot_redactions r;
-
--- Rebuild FTS index from the surviving messages.
-INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
-
--- Restore FTS sync triggers so future inserts/updates
--- keep the index current.
-CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content)
-        VALUES (new.id, new.content);
-END;
-CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_fts(rowid, content)
-        VALUES (new.id, new.content);
-END;
 
 -- Update stats
 INSERT OR REPLACE INTO stats (key, value) VALUES

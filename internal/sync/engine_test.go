@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/skillsgo/agentsview/internal/db"
 	"github.com/skillsgo/agentsview/internal/dbtest"
 	"github.com/skillsgo/agentsview/internal/export"
@@ -26,6 +27,10 @@ import (
 	"github.com/skillsgo/agentsview/internal/testjsonl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+var dbMessageCmpOption = cmpopts.IgnoreUnexported(
+	db.Message{}, db.ToolCall{}, db.ToolResultEvent{},
 )
 
 func openTestDB(t *testing.T) *db.DB {
@@ -4083,7 +4088,7 @@ func TestFilterEmptyMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := pairAndFilter(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, got)
+			diff := cmp.Diff(tt.want, got, dbMessageCmpOption)
 			assert.Empty(t, diff, "pairAndFilter() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4144,7 +4149,7 @@ func TestPostFilterCounts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			total, user := postFilterCounts(tt.msgs)
 			got := counts{Total: total, User: user}
-			diff := cmp.Diff(tt.want, got)
+			diff := cmp.Diff(tt.want, got, dbMessageCmpOption)
 			assert.Empty(t, diff, "postFilterCounts() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4231,7 +4236,7 @@ func TestPairToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, nil)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, dbMessageCmpOption)
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4348,7 +4353,7 @@ func TestPairToolResultsContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResults(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, dbMessageCmpOption)
 			assert.Empty(t, diff, "pairToolResults() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4559,7 +4564,7 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pairToolResultEventSummaries(tt.msgs, tt.blocked)
-			diff := cmp.Diff(tt.want, tt.msgs)
+			diff := cmp.Diff(tt.want, tt.msgs, dbMessageCmpOption)
 			require.Empty(t, diff, "pairToolResultEventSummaries() mismatch (-want +got):\n%s", diff)
 		})
 	}
@@ -4665,10 +4670,10 @@ func TestApplyRemoteRewrites(t *testing.T) {
 			e.applyRemoteRewrites(&tt.sess, tt.msgs)
 
 			assert.Equal(t, tt.wantSessID, tt.sess.ID)
-			diff := cmp.Diff(tt.wantParent, tt.sess.ParentSessionID)
+			diff := cmp.Diff(tt.wantParent, tt.sess.ParentSessionID, dbMessageCmpOption)
 			assert.Empty(t, diff, "ParentSessionID %s", diff)
 			if tt.wantFilePath != nil {
-				diff := cmp.Diff(tt.wantFilePath, tt.sess.FilePath)
+				diff := cmp.Diff(tt.wantFilePath, tt.sess.FilePath, dbMessageCmpOption)
 				assert.Empty(t, diff, "FilePath %s", diff)
 			}
 			for _, m := range tt.msgs {
@@ -4688,9 +4693,9 @@ func TestApplyRemoteRewrites(t *testing.T) {
 					}
 				}
 			}
-			diff = cmp.Diff(tt.wantSubs, gotSubs)
+			diff = cmp.Diff(tt.wantSubs, gotSubs, dbMessageCmpOption)
 			assert.Empty(t, diff, "SubagentSessionIDs %s", diff)
-			diff = cmp.Diff(tt.wantEvSubs, gotEvSubs)
+			diff = cmp.Diff(tt.wantEvSubs, gotEvSubs, dbMessageCmpOption)
 			assert.Empty(t, diff, "ResultEvent SubagentSessionIDs %s", diff)
 		})
 	}

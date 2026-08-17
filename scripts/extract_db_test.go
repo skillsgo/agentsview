@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"os"
 	"os/exec"
@@ -12,6 +13,47 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func insertFixtureContent(t *testing.T, conn *sql.DB, content string) int64 {
+	t.Helper()
+	digest := sha256.Sum256([]byte(content))
+	_, err := conn.Exec(`INSERT OR IGNORE INTO content_objects
+		(digest, raw_size, codec, payload) VALUES (?, ?, 0, ?)`,
+		digest[:], len(content), []byte(content))
+	require.NoError(t, err)
+	var id int64
+	require.NoError(t, conn.QueryRow(
+		"SELECT id FROM content_objects WHERE digest = ?", digest[:],
+	).Scan(&id))
+	_, err = conn.Exec(
+		"INSERT OR REPLACE INTO content_fts(rowid, content) VALUES (?, ?)",
+		id, content,
+	)
+	require.NoError(t, err)
+	return id
+}
+
+func insertFixtureMessage(
+	t *testing.T, conn *sql.DB, id int, sessionID, content string,
+) {
+	t.Helper()
+	objectID := insertFixtureContent(t, conn, content)
+	if id == 0 {
+		_, err := conn.Exec(`INSERT INTO messages
+			(session_id, ordinal, role, content_object_id, content_length)
+			VALUES (?, 0, 'user', ?, ?)`, sessionID, objectID, len(content))
+		require.NoError(t, err)
+	} else {
+		_, err := conn.Exec(`INSERT INTO messages
+			(id, session_id, ordinal, role, content_object_id, content_length)
+			VALUES (?, ?, 0, 'user', ?, ?)`, id, sessionID, objectID, len(content))
+		require.NoError(t, err)
+	}
+	_, err := conn.Exec(
+		"UPDATE content_objects SET ref_count = ref_count + 1 WHERE id = ?", objectID,
+	)
+	require.NoError(t, err)
+}
 
 // TestExtractDBBlocksTermsAcrossCoveredColumns exercises the screenshot
 // blocked-terms filter end to end: it seeds a source database with sessions
@@ -55,20 +97,21 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 		require.NoError(t, err)
 	}
 	insertMessage := func(id int, sessionID, content string) {
-		_, err := conn.Exec(
-			`INSERT INTO messages (id, session_id, ordinal, role, content)
-			 VALUES (?, ?, 0, 'user', ?)`,
-			id, sessionID, content,
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, id, sessionID, content)
 	}
 	insertToolCall := func(sessionID, filePath, skillName, inputJSON string) {
+		inputObjectID := insertFixtureContent(t, conn, inputJSON)
 		_, err := conn.Exec(
 			`INSERT INTO tool_calls
 			   (message_id, session_id, tool_name, category,
-			    file_path, skill_name, input_json)
+			    file_path, skill_name, input_object_id)
 			 VALUES (0, ?, 'Edit', 'edit', ?, ?, ?)`,
-			sessionID, filePath, skillName, inputJSON,
+			sessionID, filePath, skillName, inputObjectID,
+		)
+		require.NoError(t, err)
+		_, err = conn.Exec(
+			"UPDATE content_objects SET ref_count = ref_count + 1 WHERE id = ?",
+			inputObjectID,
 		)
 		require.NoError(t, err)
 	}
@@ -165,12 +208,7 @@ func TestExtractDBUsesPrivateTermsFileByDefault(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
-			`INSERT INTO messages (session_id, ordinal, role, content)
-			 VALUES (?, 0, 'user', ?)`,
-			id, content,
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, 0, id, content)
 	}
 	seed("s_keep", "ordinary screenshot-safe notes")
 	seed("s_drop", "mentions blocklist-demo-service in the transcript")
@@ -250,19 +288,16 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 			id, ts, firstMessage,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
-			`INSERT INTO messages (session_id, ordinal, role, content)
-			 VALUES (?, 0, 'user', ?)`,
-			id, content,
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, 0, id, content)
 	}
 	seed("s_keep", "ordinary screenshot-safe notes", "clean transcript")
 	seed(
 		"s_redact",
 		"Review work under "+filepath.Join(homePath, "code", "project-a"),
-		"Inspect "+filepath.Join(homePath, "code", "project-a", "main.go"),
+		"Inspect the project main file",
 	)
+	seed("s_drop_body", "ordinary prompt",
+		"Inspect "+filepath.Join(homePath, "code", "project-a", "main.go"))
 
 	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
@@ -300,17 +335,12 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 
 	assert.Equal(t, []string{"s_keep", "s_redact"}, ids)
 
-	var firstMessage, content string
+	var firstMessage string
 	require.NoError(t, outConn.QueryRow(
-		`SELECT s.first_message, m.content
-		 FROM sessions s
-		 JOIN messages m ON m.session_id = s.id
-		 WHERE s.id = 's_redact'`,
-	).Scan(&firstMessage, &content))
+		`SELECT first_message FROM sessions WHERE id = 's_redact'`,
+	).Scan(&firstMessage))
 	assert.Equal(t, "Review work under ~/code/project-a", firstMessage)
-	assert.Equal(t, "Inspect ~/code/project-a/main.go", content)
 	assert.NotContains(t, firstMessage, homePath)
-	assert.NotContains(t, content, homePath)
 }
 
 func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
@@ -341,12 +371,7 @@ func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
-			`INSERT INTO messages (session_id, ordinal, role, content)
-			 VALUES (?, 0, 'user', ?)`,
-			id, content,
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, 0, id, content)
 	}
 	seed("s_keep", "ordinary screenshot-safe notes")
 	seed("s_drop_private", "mentions private-only-demo in the transcript")
@@ -426,12 +451,7 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 			parentID, relationship, automated, id+" prompt",
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
-			`INSERT INTO messages (session_id, ordinal, role, content)
-			 VALUES (?, 0, 'user', ?)`,
-			id, id+" message",
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, 0, id, id+" message")
 	}
 
 	const recent = "2026-06-01T12:00:00.000Z"
@@ -472,10 +492,19 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		 VALUES ('private-workstation', '/private', 'agentsview')`,
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	thinkingObjectID := insertFixtureContent(t, conn, "private reasoning")
+	result, err := conn.Exec(
 		`UPDATE messages
-		 SET thinking_text = 'private reasoning', has_thinking = 1
+		 SET thinking_object_id = ?, has_thinking = 1
 		 WHERE session_id IN ('old_thinking_keep', 'automated_thinking_keep')`,
+		thinkingObjectID,
+	)
+	require.NoError(t, err)
+	refs, err := result.RowsAffected()
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		"UPDATE content_objects SET ref_count = ref_count + ? WHERE id = ?",
+		refs, thinkingObjectID,
 	)
 	require.NoError(t, err)
 
@@ -612,27 +641,14 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		VALUES
 			('s_keep', 'agentsview', '2026-06-01T12:00:00.000Z', '', 1, 1,
 			 'ordinary screenshot-safe notes');
-		INSERT INTO messages (session_id, ordinal, role, content)
-		VALUES ('s_keep', 0, 'user', 'clean transcript');
 		INSERT INTO worktree_project_mappings (machine, path_prefix, project)
 		VALUES ('dev-laptop', '/workspace', 'agentsview');
 	`)
 	require.NoError(t, err)
+	insertFixtureMessage(t, conn, 0, "s_keep", "clean transcript")
 	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	ftsSQL := `
-		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-			content,
-			content='messages',
-			content_rowid='id',
-			tokenize='porter unicode61'
-		);
-		INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
-	`
-	out, err := exec.Command("sqlite3", srcPath, ftsSQL).CombinedOutput()
-	require.NoErrorf(t, err, "create FTS fixture: %s", out)
-
 	outPath := filepath.Join(tempDir, "out.db")
 	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
 	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
@@ -641,7 +657,7 @@ func TestExtractDBSupportsArchivesBeforeMappingChangeJournals(t *testing.T) {
 		"SCREENSHOT_BLOCKED_TERMS=",
 		"SCREENSHOT_BLOCKED_TERMS_FILE="+filepath.Join(tempDir, "absent.txt"),
 	)
-	out, err = cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "extract-db.sh failed: %s", out)
 
 	outConn, err := sql.Open("sqlite3", outPath)
@@ -687,12 +703,7 @@ func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
 			id, ts,
 		)
 		require.NoError(t, err)
-		_, err = conn.Exec(
-			`INSERT INTO messages (session_id, ordinal, role, content)
-			 VALUES (?, 0, 'user', ?)`,
-			id, content,
-		)
-		require.NoError(t, err)
+		insertFixtureMessage(t, conn, 0, id, content)
 	}
 	// Clean session whose transcript contains '#' (a markdown heading). If a
 	// bare '#' comment line leaked through as the pattern '%#%', this session
