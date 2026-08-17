@@ -202,6 +202,11 @@ func initializeContentArchive(ctx context.Context, archive *sql.DB) error {
 func (db *DB) populateContentArchive(
 	ctx context.Context, archive *sql.DB, report *ContentArchiveReport,
 ) error {
+	sourceTx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("beginning source archive snapshot: %w", err)
+	}
+	defer func() { _ = sourceTx.Rollback() }()
 	tx, err := archive.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning content archive build: %w", err)
@@ -246,7 +251,7 @@ func (db *DB) populateContentArchive(
 	seenObjects := make(map[[sha256.Size]byte]struct{})
 	seenChunks := make(map[[sha256.Size]byte]struct{})
 	for _, query := range queries {
-		if err := db.streamContentReferences(ctx, query, func(ref contentReference) error {
+		if err := streamContentReferences(ctx, sourceTx, query, func(ref contentReference) error {
 			return storeContentReference(
 				ctx, statements, encoder, ref, seenObjects, seenChunks, report,
 			)
@@ -256,6 +261,9 @@ func (db *DB) populateContentArchive(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing content archive: %w", err)
+	}
+	if err := sourceTx.Commit(); err != nil {
+		return fmt.Errorf("closing source archive snapshot: %w", err)
 	}
 	return nil
 }
@@ -308,10 +316,11 @@ func (s *contentArchiveStatements) close() {
 	}
 }
 
-func (db *DB) streamContentReferences(
-	ctx context.Context, query string, consume func(contentReference) error,
+func streamContentReferences(
+	ctx context.Context, source *sql.Tx, query string,
+	consume func(contentReference) error,
 ) error {
-	rows, err := db.getReader().QueryContext(ctx, query)
+	rows, err := source.QueryContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("querying legacy content: %w", err)
 	}
