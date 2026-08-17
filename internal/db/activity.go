@@ -7,34 +7,26 @@ import (
 	"time"
 )
 
-// SessionActivityBucket holds message counts for one time interval.
 type SessionActivityBucket struct {
 	StartTime      string `json:"start_time"`
 	EndTime        string `json:"end_time"`
 	UserCount      int    `json:"user_count"`
 	AssistantCount int    `json:"assistant_count"`
-	FirstOrdinal   *int   `json:"first_ordinal"` // nil for empty buckets
+	FirstOrdinal   *int   `json:"first_ordinal"`
 }
 
-// SessionActivityResponse is the response for the activity endpoint.
 type SessionActivityResponse struct {
 	Buckets         []SessionActivityBucket `json:"buckets"`
 	IntervalSeconds int64                   `json:"interval_seconds"`
 	TotalMessages   int                     `json:"total_messages"`
 }
 
-// intervalSteps are preferred bucket widths in seconds.
-// For sessions longer than the last step * maxBuckets, the
-// interval scales beyond this list to keep bucket count bounded.
 var intervalSteps = []int64{
 	60, 120, 300, 600, 900, 1800, 3600, 7200,
 }
 
 const maxBuckets = 50
 
-// SnapInterval picks a bucket interval targeting ~30 buckets.
-// For very long sessions the interval scales beyond the fixed
-// step list so the total bucket count never exceeds maxBuckets.
 func SnapInterval(durationSec int64) int64 {
 	if durationSec <= 0 {
 		return intervalSteps[0]
@@ -43,178 +35,181 @@ func SnapInterval(durationSec int64) int64 {
 	if target <= intervalSteps[0] {
 		return intervalSteps[0]
 	}
-
-	// Try the fixed step list first.
 	best := intervalSteps[0]
 	bestDist := abs64(intervalSteps[0] - target)
 	for _, step := range intervalSteps {
-		d := abs64(step - target)
-		if d < bestDist || (d == bestDist && step > best) {
-			bestDist = d
+		distance := abs64(step - target)
+		if distance < bestDist || (distance == bestDist && step > best) {
+			bestDist = distance
 			best = step
 		}
 	}
-
-	// If the best fixed step would produce too many buckets,
-	// scale up to keep the count bounded. Bucket count is
-	// floor(duration/interval) + 1, so divide by maxBuckets-1.
 	if durationSec/best+1 > maxBuckets {
 		best = (durationSec + maxBuckets - 2) / (maxBuckets - 1)
 	}
 	return best
 }
 
-func abs64(x int64) int64 {
-	if x < 0 {
-		return -x
+func abs64(value int64) int64 {
+	if value < 0 {
+		return -value
 	}
-	return x
+	return value
 }
 
-// GetSessionActivity returns time-bucketed message counts for a
-// session. Only visible messages are counted (system and
-// prefix-detected injected messages excluded).
 func (d *DB) GetSessionActivity(
 	ctx context.Context, sessionID string,
 ) (*SessionActivityResponse, error) {
 	return getSessionActivitySQLite(d, ctx, sessionID)
 }
 
+type activityMessage struct {
+	ordinal   int
+	role      string
+	isSystem  bool
+	timestamp sql.NullString
+	objectID  sql.NullInt64
+}
+
+// getSessionActivitySQLite hydrates only the content objects needed for the
+// system-prefix visibility rule, then performs timestamp bucketing in Go. It
+// therefore behaves identically with and without FTS and never needs an
+// uncompressed body on messages.
 func getSessionActivitySQLite(
 	d *DB, ctx context.Context, sessionID string,
 ) (*SessionActivityResponse, error) {
-	// Count all messages, including system (for TotalMessages field).
-	var total int
-	err := d.getReader().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM messages WHERE session_id = ?`,
-		sessionID,
-	).Scan(&total)
+	rows, err := d.getReader().QueryContext(ctx, `SELECT ordinal, role,
+		is_system, timestamp, content_object_id
+		FROM messages WHERE session_id = ? ORDER BY ordinal`, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("counting messages: %w", err)
+		return nil, fmt.Errorf("querying activity messages: %w", err)
 	}
-
-	// Visible-message filter: exclude persisted system messages and
-	// prefix-detected injected user messages.
-	contentExpr := "m.content"
-	contentJoin := ""
-	if d.hasContentFTS() {
-		contentExpr = "content_fts.content"
-		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
-	}
-	visibleFilter := "m.is_system = 0 AND " + SystemPrefixSQL(contentExpr, "m.role")
-
-	// Get min and max timestamps from visible messages with valid timestamps.
-	// Use julianday() for sub-second precision — strftime('%s') truncates.
-	tsFilter := "m.timestamp IS NOT NULL AND m.timestamp != '' AND julianday(m.timestamp) IS NOT NULL"
-	var minEpoch, maxEpoch sql.NullFloat64
-	err = d.getReader().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT
-			MIN((julianday(m.timestamp) - 2440587.5) * 86400.0),
-			MAX((julianday(m.timestamp) - 2440587.5) * 86400.0)
-		FROM messages m
-		%s
-		WHERE m.session_id = ?
-		  AND %s
-		  AND %s`,
-		contentJoin, visibleFilter, tsFilter,
-	), sessionID).Scan(&minEpoch, &maxEpoch)
-	if err != nil {
-		return nil, fmt.Errorf("querying timestamp range: %w", err)
-	}
-
-	// If no timestamps, return empty buckets with total count.
-	if !minEpoch.Valid || !maxEpoch.Valid {
-		return &SessionActivityResponse{
-			Buckets:       []SessionActivityBucket{},
-			TotalMessages: total,
-		}, nil
-	}
-
-	// Use floor of min epoch as anchor so bucket boundaries
-	// align to whole seconds. Compute duration from the exact
-	// float values to preserve sub-second precision.
-	epochMin := int64(minEpoch.Float64)
-	durationSec := int64(maxEpoch.Float64 - minEpoch.Float64)
-	interval := SnapInterval(durationSec)
-
-	// Query: group visible messages into buckets using float epoch
-	// for sub-second precision. The anchor is truncated to whole
-	// seconds so bucket boundaries align cleanly.
-	rows, err := d.getReader().QueryContext(ctx, fmt.Sprintf(`
-		SELECT
-			CAST(((julianday(m.timestamp) - 2440587.5) * 86400.0 - ?) / ? AS INTEGER) AS bucket_idx,
-			SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) AS user_count,
-			SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS asst_count,
-			MIN(m.ordinal) AS first_ordinal
-		FROM messages m
-		%s
-		WHERE m.session_id = ?
-		  AND %s
-		  AND %s
-		GROUP BY bucket_idx
-		ORDER BY bucket_idx`,
-		contentJoin, visibleFilter, tsFilter,
-	), epochMin, interval, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("querying activity buckets: %w", err)
-	}
-	defer rows.Close()
-
-	type bucketRow struct {
-		idx          int
-		userCount    int
-		asstCount    int
-		firstOrdinal int
-	}
-	var populated []bucketRow
-	maxIdx := 0
+	var messages []activityMessage
+	var objectIDs []int64
 	for rows.Next() {
-		var br bucketRow
-		if err := rows.Scan(
-			&br.idx, &br.userCount, &br.asstCount, &br.firstOrdinal,
-		); err != nil {
-			return nil, fmt.Errorf("scanning bucket row: %w", err)
+		var message activityMessage
+		if err := rows.Scan(&message.ordinal, &message.role, &message.isSystem,
+			&message.timestamp, &message.objectID); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scanning activity message: %w", err)
 		}
-		populated = append(populated, br)
-		if br.idx > maxIdx {
-			maxIdx = br.idx
+		messages = append(messages, message)
+		if !message.isSystem && message.objectID.Valid {
+			objectIDs = append(objectIDs, message.objectID.Int64)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating bucket rows: %w", err)
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	contents, err := loadAgentContents(ctx, d.getReader(), objectIDs)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build the full bucket array including empty gaps.
-	bucketCount := maxIdx + 1
-	buckets := make([]SessionActivityBucket, bucketCount)
-
-	// Precompute a lookup from bucket index to populated row.
-	popMap := make(map[int]bucketRow, len(populated))
-	for _, br := range populated {
-		popMap[br.idx] = br
+	type visibleMessage struct {
+		ordinal int
+		role    string
+		epoch   float64
 	}
-
-	for i := range buckets {
-		startSec := epochMin + int64(i)*interval
-		endSec := startSec + interval
-		startTime := time.Unix(startSec, 0).UTC()
-		endTime := time.Unix(endSec, 0).UTC()
-		bucket := SessionActivityBucket{
-			StartTime: startTime.Format(time.RFC3339),
-			EndTime:   endTime.Format(time.RFC3339),
+	visible := make([]visibleMessage, 0, len(messages))
+	var minEpoch, maxEpoch float64
+	for _, message := range messages {
+		if message.isSystem || !message.timestamp.Valid || message.timestamp.String == "" {
+			continue
 		}
-		if br, ok := popMap[i]; ok {
-			bucket.UserCount = br.userCount
-			bucket.AssistantCount = br.asstCount
-			ord := br.firstOrdinal
-			bucket.FirstOrdinal = &ord
+		content := ""
+		if message.objectID.Valid {
+			content = contents[message.objectID.Int64]
 		}
-		buckets[i] = bucket
+		if IsSystemPrefixed(content, message.role) {
+			continue
+		}
+		stamp, err := parseActivityTimestamp(message.timestamp.String)
+		if err != nil {
+			continue
+		}
+		epoch := float64(stamp.Unix()) + float64(stamp.Nanosecond())/1e9
+		if len(visible) == 0 || epoch < minEpoch {
+			minEpoch = epoch
+		}
+		if len(visible) == 0 || epoch > maxEpoch {
+			maxEpoch = epoch
+		}
+		visible = append(visible, visibleMessage{
+			ordinal: message.ordinal, role: message.role, epoch: epoch,
+		})
+	}
+	if len(visible) == 0 {
+		return &SessionActivityResponse{
+			Buckets: []SessionActivityBucket{}, TotalMessages: len(messages),
+		}, nil
 	}
 
+	epochMin := int64(minEpoch)
+	durationSec := int64(maxEpoch - minEpoch)
+	interval := SnapInterval(durationSec)
+	type bucketCount struct {
+		user, assistant int
+		firstOrdinal    int
+		set             bool
+	}
+	populated := make(map[int]*bucketCount)
+	maxIndex := 0
+	for _, message := range visible {
+		index := int((message.epoch - float64(epochMin)) / float64(interval))
+		bucket := populated[index]
+		if bucket == nil {
+			bucket = &bucketCount{firstOrdinal: message.ordinal, set: true}
+			populated[index] = bucket
+		}
+		if message.ordinal < bucket.firstOrdinal {
+			bucket.firstOrdinal = message.ordinal
+		}
+		switch message.role {
+		case "user":
+			bucket.user++
+		case "assistant":
+			bucket.assistant++
+		}
+		if index > maxIndex {
+			maxIndex = index
+		}
+	}
+
+	buckets := make([]SessionActivityBucket, maxIndex+1)
+	for index := range buckets {
+		start := epochMin + int64(index)*interval
+		buckets[index] = SessionActivityBucket{
+			StartTime: time.Unix(start, 0).UTC().Format(time.RFC3339),
+			EndTime:   time.Unix(start+interval, 0).UTC().Format(time.RFC3339),
+		}
+		if count := populated[index]; count != nil && count.set {
+			buckets[index].UserCount = count.user
+			buckets[index].AssistantCount = count.assistant
+			ordinal := count.firstOrdinal
+			buckets[index].FirstOrdinal = &ordinal
+		}
+	}
 	return &SessionActivityResponse{
-		Buckets:         buckets,
-		IntervalSeconds: interval,
-		TotalMessages:   total,
+		Buckets: buckets, IntervalSeconds: interval, TotalMessages: len(messages),
 	}, nil
+}
+
+func parseActivityTimestamp(value string) (time.Time, error) {
+	if stamp, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return stamp, nil
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+	} {
+		if stamp, err := time.Parse(layout, value); err == nil {
+			return stamp, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamp %q", value)
 }

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -72,39 +73,61 @@ func (db *DB) GetTrendsTerms(
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	flt := f.messageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	contentExpr := "m.content"
-	contentJoin := ""
-	if db.hasContentFTS() {
-		contentExpr = "content_fts.content"
-		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
-	}
-	query := fmt.Sprintf(`SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), %s, COALESCE(m.timestamp, ''),
+	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
+			COALESCE(m.model, ''), m.content_object_id, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		%s
-		WHERE `+where+`
+		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = 0
-			AND `+SystemPrefixSQL(contentExpr, "m.role")+`
-		ORDER BY m.session_id, m.ordinal`, contentExpr, contentJoin)
+		ORDER BY m.session_id, m.ordinal`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return TrendsTermsResponse{}, fmt.Errorf("querying trends terms: %w", err)
 	}
-	defer rows.Close()
-
 	type trendRow struct {
 		sessionID string
+		ordinal   int
 		role      string
 		isSystem  bool
 		model     string
 		content   string
+		objectID  sql.NullInt64
 		msgTS     string
 		startedAt string
 		createdAt string
+	}
+	var trendRows []trendRow
+	var objectIDs []int64
+	for rows.Next() {
+		var row trendRow
+		var ordinal int
+		if err := rows.Scan(
+			&row.sessionID, &ordinal, &row.role, &row.isSystem,
+			&row.model, &row.objectID, &row.msgTS, &row.startedAt,
+			&row.createdAt,
+		); err != nil {
+			_ = rows.Close()
+			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
+		}
+		row.ordinal = ordinal
+		trendRows = append(trendRows, row)
+		if row.objectID.Valid {
+			objectIDs = append(objectIDs, row.objectID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return TrendsTermsResponse{}, err
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+	if err != nil {
+		return TrendsTermsResponse{}, err
 	}
 	processRow := func(row trendRow) {
 		msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
@@ -143,15 +166,12 @@ func (db *DB) GetTrendsTerms(
 	}
 	reducer := NewScopeReducer(flt, emit)
 
-	for rows.Next() {
-		var row trendRow
-		var ordinal int
-		if err := rows.Scan(
-			&row.sessionID, &ordinal, &row.role, &row.isSystem,
-			&row.model, &row.content, &row.msgTS, &row.startedAt,
-			&row.createdAt,
-		); err != nil {
-			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
+	for _, row := range trendRows {
+		if row.objectID.Valid {
+			row.content = contents[row.objectID.Int64]
+		}
+		if IsSystemPrefixed(row.content, row.role) {
+			continue
 		}
 		if !modelFiltering {
 			msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
@@ -165,7 +185,7 @@ func (db *DB) GetTrendsTerms(
 		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
 		if err := reducer.Push(MessageInput{
 			SessionID:    row.sessionID,
-			Ordinal:      ordinal,
+			Ordinal:      row.ordinal,
 			Role:         row.role,
 			Model:        row.model,
 			IsSystem:     row.isSystem,
@@ -177,10 +197,6 @@ func (db *DB) GetTrendsTerms(
 			return TrendsTermsResponse{}, err
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
-	}
-
 	return BuildTrendsTermsResponse(
 		f.From, f.To, granularity, buckets, terms, counts, messageCounts,
 	), nil

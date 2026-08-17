@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"sort"
@@ -561,49 +562,78 @@ func (db *DB) SearchSession(
 	if query == "" {
 		return nil, nil
 	}
-	// Use LIKE for substring semantics consistent with browser find-bar UX.
-	// SQLite LIKE is case-insensitive for ASCII by default.
-	// LEFT JOIN tool_calls so that a hit in result_content also surfaces
-	// the parent message ordinal; DISTINCT collapses multiple tool calls
-	// on the same message into a single result.
-	like := "%" + escapeLike(query) + "%"
-	messageContent, messageJoin := "m.content", ""
-	resultContent, resultJoin := "tc.result_content", ""
-	if db.hasContentFTS() {
-		messageContent = "message_content.content"
-		messageJoin = "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
-		resultContent = "result_content.content"
-		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+	type searchRow struct {
+		ordinal  int
+		role     string
+		isSystem bool
+		message  sql.NullInt64
+		result   sql.NullInt64
 	}
-	searchSQL := fmt.Sprintf(`SELECT DISTINCT m.ordinal
-		 FROM messages m
-		 %s
-		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
-		 %s
-		 WHERE m.session_id = ?
-		   AND m.is_system = 0
-		   AND %s
-		   AND (%s LIKE ? ESCAPE '\'
-		        OR %s LIKE ? ESCAPE '\')
-		 ORDER BY m.ordinal ASC`, messageJoin, resultJoin,
-		SystemPrefixSQL(messageContent, "m.role"), messageContent, resultContent)
-	rows, err := db.getReader().QueryContext(ctx, searchSQL,
-		sessionID, like, like,
-	)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT m.ordinal, m.role,
+		m.is_system, m.content_object_id, tc.result_object_id
+		FROM messages m
+		LEFT JOIN tool_calls tc ON tc.message_id = m.id
+		WHERE m.session_id = ? ORDER BY m.ordinal, tc.id`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)
 	}
-	defer rows.Close()
-
-	var ordinals []int
+	var candidates []searchRow
+	var objectIDs []int64
 	for rows.Next() {
-		var ord int
-		if err := rows.Scan(&ord); err != nil {
-			return nil, fmt.Errorf("scanning ordinal: %w", err)
+		var candidate searchRow
+		if err := rows.Scan(&candidate.ordinal, &candidate.role,
+			&candidate.isSystem, &candidate.message, &candidate.result); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scanning session search row: %w", err)
 		}
-		ordinals = append(ordinals, ord)
+		candidates = append(candidates, candidate)
+		if candidate.message.Valid {
+			objectIDs = append(objectIDs, candidate.message.Int64)
+		}
+		if candidate.result.Valid {
+			objectIDs = append(objectIDs, candidate.result.Int64)
+		}
 	}
-	return ordinals, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(query)
+	seen := make(map[int]struct{})
+	var ordinals []int
+	for _, candidate := range candidates {
+		if candidate.isSystem {
+			continue
+		}
+		message := ""
+		if candidate.message.Valid {
+			message = contents[candidate.message.Int64]
+		}
+		if IsSystemPrefixed(message, candidate.role) {
+			continue
+		}
+		result := ""
+		if candidate.result.Valid {
+			result = contents[candidate.result.Int64]
+		}
+		if !strings.Contains(strings.ToLower(message), needle) &&
+			!strings.Contains(strings.ToLower(result), needle) {
+			continue
+		}
+		if _, exists := seen[candidate.ordinal]; exists {
+			continue
+		}
+		seen[candidate.ordinal] = struct{}{}
+		ordinals = append(ordinals, candidate.ordinal)
+	}
+	return ordinals, nil
 }
 
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite

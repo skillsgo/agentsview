@@ -484,38 +484,25 @@ func (db *DB) ScanEmbeddableUnits(
 	ctx context.Context, since string, includeAutomated bool,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
-	contentExpr := "m.content"
-	contentJoin := ""
-	var hasContentFTS int
-	if err := db.getReader().QueryRow(`SELECT count(*) FROM sqlite_master
-		WHERE type = 'table' AND name = 'content_fts'`).Scan(&hasContentFTS); err != nil {
-		return "", fmt.Errorf("probing Agent content projection: %w", err)
-	}
-	if hasContentFTS > 0 {
-		contentExpr = "content_fts.content"
-		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
-	}
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
 		"s.deleted_at IS NULL",
-		SystemPrefixSQL(contentExpr, "m.role"),
 	}
 	if !includeAutomated {
 		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT m.session_id, m.role, m.source_uuid, m.ordinal,
-		       %s,
+		       m.content_object_id,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
-		%s
 		JOIN sessions s ON s.id = m.session_id
-		WHERE `+strings.Join(preds, "\n\t\t  AND ")+`
-		`+optionalSinceClause(since)+`
-		ORDER BY m.session_id, m.ordinal`, contentExpr, contentJoin)
+		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
+		` + optionalSinceClause(since) + `
+		ORDER BY m.session_id, m.ordinal`
 
 	args := []any{}
 	if since != "" {
@@ -526,12 +513,58 @@ func (db *DB) ScanEmbeddableUnits(
 	if err != nil {
 		return "", fmt.Errorf("scanning embeddable units: %w", err)
 	}
-	defer rows.Close()
-
-	red := &unitReducer{fn: fn}
-	maxEnded, err = reduceUnitRows(rows, red)
+	type storedUnitRow struct {
+		row              unitRow
+		objectID         sql.NullInt64
+		relationshipType string
+		parentSessionID  sql.NullString
+		ended            sql.NullString
+	}
+	var storedRows []storedUnitRow
+	var objectIDs []int64
+	for rows.Next() {
+		var stored storedUnitRow
+		if err := rows.Scan(
+			&stored.row.sessionID, &stored.row.role, &stored.row.sourceUUID,
+			&stored.row.ordinal, &stored.objectID, &stored.row.sidechain,
+			&stored.relationshipType, &stored.parentSessionID, &stored.ended,
+		); err != nil {
+			_ = rows.Close()
+			return "", fmt.Errorf("scanning embeddable unit row: %w", err)
+		}
+		storedRows = append(storedRows, stored)
+		if stored.objectID.Valid {
+			objectIDs = append(objectIDs, stored.objectID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", fmt.Errorf("iterating embeddable units: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
 	if err != nil {
 		return "", err
+	}
+	red := &unitReducer{fn: fn}
+	for _, stored := range storedRows {
+		if stored.objectID.Valid {
+			stored.row.content = contents[stored.objectID.Int64]
+		}
+		if IsSystemPrefixed(stored.row.content, stored.row.role) {
+			continue
+		}
+		if stored.ended.Valid && endedAfter(stored.ended.String, maxEnded) {
+			maxEnded = stored.ended.String
+		}
+		stored.row.subordinateSession = isSubordinateSession(
+			stored.relationshipType, stored.parentSessionID,
+		)
+		if err := red.push(stored.row); err != nil {
+			return "", err
+		}
 	}
 	if err := red.finish(); err != nil {
 		return "", err
