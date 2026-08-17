@@ -14,7 +14,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/klauspost/compress/zstd"
 	"github.com/skillsgo/agentsview/internal/parser"
 )
 
@@ -2634,14 +2633,11 @@ func applyToolCallSubagentLinkTx(
 		currentResultContent == resultContent {
 		return false, nil
 	}
-	encoder, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
-		zstd.WithEncoderConcurrency(1),
-	)
+	encoder, err := acquireAgentContentEncoder()
 	if err != nil {
 		return false, fmt.Errorf("creating Agent content encoder: %w", err)
 	}
-	defer encoder.Close()
+	defer releaseAgentContentEncoder(encoder)
 	resultObjectID, err := putAgentContentTx(tx, encoder, resultContent, false)
 	if err != nil {
 		return false, err

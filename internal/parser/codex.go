@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/tidwall/gjson"
 )
@@ -1556,36 +1558,35 @@ func CodexReplayParentID(childPath string) (string, bool) {
 	defer f.Close()
 
 	parentID := ""
-	resolutionNeeded := false
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !gjson.Valid(line) {
+	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
+	for {
+		lineBytes, ok := lr.nextBytes()
+		if !ok {
+			break
+		}
+		lineBytes = bytes.TrimSpace(lineBytes)
+		if len(lineBytes) == 0 {
 			continue
 		}
-		if resolutionNeeded || gjson.Get(line, "type").Str != codexTypeSessionMeta {
+		line := unsafe.String(unsafe.SliceData(lineBytes), len(lineBytes))
+		if gjson.Get(line, "type").Str != codexTypeSessionMeta || !gjson.Valid(line) {
 			continue
 		}
 		payload := gjson.Get(line, "payload")
 		forkedFromID := strings.TrimSpace(payload.Get("forked_from_id").Str)
 		if forkedFromID != "" {
-			parentID = forkedFromID
-			resolutionNeeded = true
-			continue
+			return strings.Clone(forkedFromID), true
 		}
 		if parentID == "" {
-			parentID = codexSubagentParentThreadID(payload)
+			parentID = strings.Clone(codexSubagentParentThreadID(payload))
 			continue
 		}
 		if payload.Get("id").Str == parentID {
-			resolutionNeeded = true
+			return parentID, true
 		}
 	}
-	if scanner.Err() != nil || parentID == "" || !resolutionNeeded {
-		return "", false
-	}
-	return parentID, true
+	return "", false
 }
 
 // parseSessionSnapshot parses exactly the raw-size snapshot captured from f.

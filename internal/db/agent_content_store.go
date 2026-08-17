@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
+	"unsafe"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -26,6 +28,38 @@ var agentContentReferences = []agentContentReference{
 	{table: "messages", columns: []string{"content_object_id", "thinking_object_id"}},
 	{table: "tool_calls", columns: []string{"input_object_id", "result_object_id"}},
 	{table: "tool_result_events", columns: []string{"content_object_id"}},
+}
+
+const (
+	agentContentCompressionWorkers  = 4
+	agentContentEncoderPoolCapacity = 4
+)
+
+var agentContentEncoderPool = make(
+	chan *zstd.Encoder, agentContentEncoderPoolCapacity,
+)
+
+func acquireAgentContentEncoder() (*zstd.Encoder, error) {
+	select {
+	case encoder := <-agentContentEncoderPool:
+		return encoder, nil
+	default:
+	}
+	return zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+		zstd.WithEncoderConcurrency(1),
+	)
+}
+
+func releaseAgentContentEncoder(encoder *zstd.Encoder) {
+	if encoder == nil {
+		return
+	}
+	select {
+	case agentContentEncoderPool <- encoder:
+	default:
+		encoder.Close()
+	}
 }
 
 // installAgentContentLifecycleLocked makes content object ownership exact.
@@ -98,52 +132,208 @@ func installAgentContentLifecycleLocked(w *writerHandle) error {
 // content-addressed physical layer and attaches private locators to the
 // normalized rows. Inline bodies remain populated during migration parity.
 func prepareAgentContentRefsTx(tx *sql.Tx, messages []Message) error {
-	encoder, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
-		zstd.WithEncoderConcurrency(1),
-	)
-	if err != nil {
-		return fmt.Errorf("creating Agent content encoder: %w", err)
-	}
-	defer encoder.Close()
+	inputs := make([]agentContentInput, 0, len(messages)*2)
 	for messageIndex := range messages {
 		message := &messages[messageIndex]
-		if message.contentObjectID, err = putAgentContentTx(
-			tx, encoder, message.Content,
-			!message.IsSystem &&
-				(message.Role == "user" || message.Role == "assistant") &&
-				!IsSystemPrefixed(message.Content, message.Role),
-		); err != nil {
-			return fmt.Errorf("storing message content: %w", err)
-		}
-		if message.thinkingObjectID, err = putAgentContentTx(
-			tx, encoder, message.ThinkingText, false,
-		); err != nil {
-			return fmt.Errorf("storing message thinking: %w", err)
-		}
+		inputs = append(inputs,
+			agentContentInput{
+				content: message.Content,
+				searchable: !message.IsSystem &&
+					(message.Role == "user" || message.Role == "assistant") &&
+					!IsSystemPrefixed(message.Content, message.Role),
+				target: &message.contentObjectID,
+			},
+			agentContentInput{content: message.ThinkingText, target: &message.thinkingObjectID},
+		)
 		for callIndex := range message.ToolCalls {
 			call := &message.ToolCalls[callIndex]
-			if call.inputObjectID, err = putAgentContentTx(
-				tx, encoder, call.InputJSON, true,
-			); err != nil {
-				return fmt.Errorf("storing tool input: %w", err)
-			}
-			if call.resultObjectID, err = putAgentContentTx(
-				tx, encoder, call.ResultContent, false,
-			); err != nil {
-				return fmt.Errorf("storing tool result: %w", err)
-			}
+			inputs = append(inputs,
+				agentContentInput{content: call.InputJSON, searchable: true, target: &call.inputObjectID},
+				agentContentInput{content: call.ResultContent, target: &call.resultObjectID},
+			)
 			for eventIndex := range call.ResultEvents {
 				event := &call.ResultEvents[eventIndex]
-				if event.contentObjectID, err = putAgentContentTx(
-					tx, encoder, event.Content, false,
-				); err != nil {
-					return fmt.Errorf("storing tool result event: %w", err)
-				}
+				inputs = append(inputs, agentContentInput{
+					content: event.Content,
+					target:  &event.contentObjectID,
+				})
 			}
 		}
 	}
+	if err := putAgentContentsTx(tx, inputs); err != nil {
+		return fmt.Errorf("storing Agent content batch: %w", err)
+	}
 	return nil
+}
+
+type agentContentInput struct {
+	content    string
+	searchable bool
+	target     **int64
+}
+
+type agentContentObject struct {
+	digest     [sha256.Size]byte
+	raw        []byte
+	content    string
+	searchable bool
+	references int
+	targets    []**int64
+	codec      int
+	payload    []byte
+}
+
+func putAgentContentsTx(tx *sql.Tx, inputs []agentContentInput) error {
+	objectsByDigest := make(map[[sha256.Size]byte]*agentContentObject, len(inputs))
+	objects := make([]*agentContentObject, 0, len(inputs))
+	for _, input := range inputs {
+		if input.content == "" {
+			continue
+		}
+		digest := sha256.Sum256(unsafe.Slice(
+			unsafe.StringData(input.content), len(input.content),
+		))
+		object := objectsByDigest[digest]
+		if object == nil {
+			object = &agentContentObject{digest: digest, content: input.content}
+			objectsByDigest[digest] = object
+			objects = append(objects, object)
+		}
+		object.searchable = object.searchable || input.searchable
+		object.references++
+		object.targets = append(object.targets, input.target)
+	}
+	if len(objects) == 0 {
+		return nil
+	}
+	selectObject, err := tx.Prepare(
+		"SELECT id FROM content_objects WHERE digest = ?",
+	)
+	if err != nil {
+		return fmt.Errorf("preparing Agent content lookup: %w", err)
+	}
+	defer selectObject.Close()
+	reserveObject, err := tx.Prepare(`UPDATE content_objects
+		SET ref_count = ref_count + ?, searchable = max(searchable, ?)
+		WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("preparing Agent content reservation: %w", err)
+	}
+	defer reserveObject.Close()
+	insertObject, err := tx.Prepare(`INSERT OR IGNORE INTO content_objects
+		(digest, raw_size, codec, payload, ref_count, searchable)
+		VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("preparing Agent content insert: %w", err)
+	}
+	defer insertObject.Close()
+	projectionAvailable, err := agentContentProjectionAvailableTx(tx)
+	if err != nil {
+		return err
+	}
+	var projectObject *sql.Stmt
+	if projectionAvailable {
+		projectObject, err = tx.Prepare(
+			"INSERT OR REPLACE INTO search_index.content_fts(rowid, content) VALUES (?, ?)",
+		)
+		if err != nil {
+			return fmt.Errorf("preparing Agent content projection: %w", err)
+		}
+		defer projectObject.Close()
+	}
+
+	missing := make([]*agentContentObject, 0, len(objects))
+	for _, object := range objects {
+		var id int64
+		err := selectObject.QueryRow(object.digest[:]).Scan(&id)
+		if err == nil {
+			if _, err := reserveObject.Exec(
+				object.references, object.searchable, id,
+			); err != nil {
+				return fmt.Errorf("reserving Agent content references: %w", err)
+			}
+			if object.searchable && projectObject != nil {
+				if _, err := projectObject.Exec(id, object.content); err != nil {
+					return fmt.Errorf("projecting existing Agent content: %w", err)
+				}
+			}
+			assignAgentContentTargets(object.targets, id)
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("looking up Agent content: %w", err)
+		}
+		object.raw = []byte(object.content)
+		missing = append(missing, object)
+	}
+	if err := compressAgentContentObjects(missing); err != nil {
+		return err
+	}
+	for _, object := range missing {
+		result, err := insertObject.Exec(object.digest[:], len(object.raw),
+			object.codec, object.payload, object.references, object.searchable)
+		if err != nil {
+			return fmt.Errorf("inserting Agent content: %w", err)
+		}
+		var id int64
+		if inserted, rowsErr := result.RowsAffected(); rowsErr == nil && inserted == 1 {
+			id, err = result.LastInsertId()
+		} else {
+			err = selectObject.QueryRow(object.digest[:]).Scan(&id)
+			if err == nil {
+				_, err = reserveObject.Exec(object.references, object.searchable, id)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("resolving Agent content insert: %w", err)
+		}
+		if object.searchable && projectObject != nil {
+			if _, err := projectObject.Exec(id, object.content); err != nil {
+				return fmt.Errorf("projecting new Agent content: %w", err)
+			}
+		}
+		assignAgentContentTargets(object.targets, id)
+	}
+	return nil
+}
+
+func compressAgentContentObjects(objects []*agentContentObject) error {
+	if len(objects) == 0 {
+		return nil
+	}
+	jobs := make(chan *agentContentObject, len(objects))
+	errs := make(chan error, min(agentContentCompressionWorkers, len(objects)))
+	var workers sync.WaitGroup
+	for range min(agentContentCompressionWorkers, len(objects)) {
+		workers.Go(func() {
+			encoder, err := acquireAgentContentEncoder()
+			if err != nil {
+				errs <- fmt.Errorf("creating Agent content encoder: %w", err)
+				return
+			}
+			defer releaseAgentContentEncoder(encoder)
+			for object := range jobs {
+				object.codec, object.payload = encodeContent(encoder, object.raw)
+			}
+		})
+	}
+	for _, object := range objects {
+		jobs <- object
+	}
+	close(jobs)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		return err
+	}
+	return nil
+}
+
+func assignAgentContentTargets(targets []**int64, id int64) {
+	for _, target := range targets {
+		assigned := id
+		*target = &assigned
+	}
 }
 
 func putAgentContentTx(
@@ -213,21 +403,9 @@ func putAgentContentTx(
 }
 
 func projectAgentContentTx(tx *sql.Tx, id int64, content string) error {
-	var attached int
-	if err := tx.QueryRow(`SELECT count(*) FROM pragma_database_list
-		WHERE name = 'search_index'`).Scan(&attached); err != nil {
-		return fmt.Errorf("probing Agent content projection database: %w", err)
-	}
-	if attached == 0 {
-		return nil
-	}
-	var exists int
-	if err := tx.QueryRow(`SELECT count(*) FROM search_index.sqlite_schema
-		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
-		return fmt.Errorf("probing Agent content projection: %w", err)
-	}
-	if exists == 0 {
-		return nil
+	available, err := agentContentProjectionAvailableTx(tx)
+	if err != nil || !available {
+		return err
 	}
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO search_index.content_fts(rowid, content) VALUES (?, ?)",
@@ -236,6 +414,23 @@ func projectAgentContentTx(tx *sql.Tx, id int64, content string) error {
 		return fmt.Errorf("projecting Agent content: %w", err)
 	}
 	return nil
+}
+
+func agentContentProjectionAvailableTx(tx *sql.Tx) (bool, error) {
+	var attached int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_database_list
+		WHERE name = 'search_index'`).Scan(&attached); err != nil {
+		return false, fmt.Errorf("probing Agent content projection database: %w", err)
+	}
+	if attached == 0 {
+		return false, nil
+	}
+	var exists int
+	if err := tx.QueryRow(`SELECT count(*) FROM search_index.sqlite_schema
+		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
+		return false, fmt.Errorf("probing Agent content projection: %w", err)
+	}
+	return exists != 0, nil
 }
 
 func readAgentContent(

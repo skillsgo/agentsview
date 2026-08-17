@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,21 @@ func TestAgentContentStoreSchemaHasOnlyObjectReferences(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentContentEncoderPoolReusesHighestLevelEncoder(t *testing.T) {
+	for len(agentContentEncoderPool) > 0 {
+		(<-agentContentEncoderPool).Close()
+	}
+	encoder, err := acquireAgentContentEncoder()
+	require.NoError(t, err)
+	releaseAgentContentEncoder(encoder)
+	runtime.GC()
+
+	reused, err := acquireAgentContentEncoder()
+	require.NoError(t, err)
+	assert.Same(t, encoder, reused)
+	releaseAgentContentEncoder(reused)
 }
 
 type schemaQueryer interface {

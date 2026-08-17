@@ -6490,11 +6490,11 @@ func (e *Engine) syncAllLocked(
 	// every exit path so the CLI sync summary can surface them.
 	defer func() { e.anomalies.applyTo(&stats) }()
 
-	// A whole-archive pass (resync rebuild, full/initial sync, remote
-	// import) is bulk work: it parses at full parallelism and frees its
-	// retained memory once at the end. Cutoff- or root-scoped passes are
-	// steady-state daemon churn and keep the bounded retention budget.
-	if writeMode == syncWriteBulk || (since.IsZero() && scope == nil) {
+	// Explicit bulk rebuild/import paths parse at full parallelism and free
+	// retained memory once at the end. Ordinary initial/full syncs use the
+	// bounded budget: their SQLite writer can be much slower than parsing, so
+	// unbounded admission would queue several archive-scale transcripts.
+	if writeMode == syncWriteBulk {
 		defer e.beginBulkRetentionPass()()
 	}
 

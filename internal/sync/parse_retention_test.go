@@ -52,39 +52,37 @@ func newWarmBenchEngine(t *testing.T) (*Engine, context.Context) {
 func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 	e, ctx := newWarmBenchEngine(t)
 	e.SyncAll(ctx, nil) // cold pass parses, acquires leases
-	require.NotNil(t, e.bulkRetentionBudget,
-		"a full sync pass must run under the bulk retention budget")
-	before := e.bulkRetentionBudget.acquired.Load()
-	require.Positive(t, before, "cold pass must acquire bulk leases")
+	require.NotNil(t, e.parseRetentionBudget,
+		"an ordinary full sync must use the bounded retention budget")
+	before := e.parseRetentionBudget.acquired.Load()
+	require.Positive(t, before, "cold pass must acquire bounded leases")
 	stats := e.SyncAll(ctx, nil) // warm pass: everything skips
 	require.Equal(t, 0, stats.Synced)
-	assert.Equal(t, before, e.bulkRetentionBudget.acquired.Load(),
+	assert.Equal(t, before, e.parseRetentionBudget.acquired.Load(),
 		"warm no-op pass must not acquire parse-retention leases")
 }
 
-func TestFullSyncPassIsUnthrottledAndScavengesOnce(t *testing.T) {
+func TestFullSyncPassUsesBoundedRetention(t *testing.T) {
 	e, ctx := newWarmBenchEngine(t)
 	var scavenges int
-	e.bulkRetentionBudget = newBulkParseRetentionBudget()
-	e.bulkRetentionBudget.scavenge = func() { scavenges++ }
+	e.parseRetentionBudget = newParseRetentionBudget(defaultParseRetentionBytes)
+	e.parseRetentionBudget.scavenge = func() { scavenges++ }
 
 	e.SyncAll(ctx, nil) // cold pass parses every source
-	acquired := e.bulkRetentionBudget.acquired.Load()
+	acquired := e.parseRetentionBudget.acquired.Load()
 	require.Positive(t, acquired,
-		"full pass must admit parses through the bulk budget")
-	if e.parseRetentionBudget != nil {
-		assert.Zero(t, e.parseRetentionBudget.acquired.Load(),
-			"full pass must not consume the bounded daemon budget")
-	}
-	assert.Equal(t, 1, scavenges,
-		"a parse-bearing bulk pass must release memory once at the end")
+		"full pass must admit parses through the bounded budget")
+	assert.Nil(t, e.bulkRetentionBudget,
+		"ordinary full sync must not install the unbounded bulk budget")
+	assert.Zero(t, scavenges,
+		"small sources must not force an OS memory scavenge")
 
 	stats := e.SyncAll(ctx, nil) // warm pass: everything skips
 	require.Equal(t, 0, stats.Synced)
-	assert.Equal(t, 1, scavenges,
+	assert.Zero(t, scavenges,
 		"a warm no-op pass must not force another scavenge")
 	assert.Nil(t, e.activeRetention.Load(),
-		"bulk budget must be uninstalled after the pass")
+		"bounded budget must be uninstalled after the pass")
 }
 
 func TestScopedSyncKeepsBoundedRetentionBudget(t *testing.T) {

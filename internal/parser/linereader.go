@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 
 	"github.com/tidwall/gjson"
 )
@@ -35,20 +34,24 @@ type lineReader struct {
 	bytesRead int64 // total bytes consumed (from countingReader)
 }
 
-const maxPooledLineBufferSize = 256 << 10
+const (
+	maxPooledLineBufferSize = 8 << 20
+	lineReaderPoolCapacity  = 8
+)
 
-var lineReaderPool = sync.Pool{
-	New: func() any {
+var lineReaderPool = make(chan *lineReader, lineReaderPoolCapacity)
+
+func newLineReader(r io.Reader, maxLen int) *lineReader {
+	var lr *lineReader
+	select {
+	case lr = <-lineReaderPool:
+	default:
 		cr := new(countingReader)
-		return &lineReader{
+		lr = &lineReader{
 			r:  bufio.NewReaderSize(cr, initialScanBufSize),
 			cr: cr,
 		}
-	},
-}
-
-func newLineReader(r io.Reader, maxLen int) *lineReader {
-	lr := lineReaderPool.Get().(*lineReader)
+	}
 	lr.cr.r = r
 	lr.cr.n = 0
 	lr.r.Reset(lr.cr)
@@ -73,7 +76,10 @@ func releaseLineReader(lr *lineReader) {
 	lr.maxLen = 0
 	lr.err = nil
 	lr.bytesRead = 0
-	lineReaderPool.Put(lr)
+	select {
+	case lineReaderPool <- lr:
+	default:
+	}
 }
 
 // next returns the next line (without trailing newline) and true,

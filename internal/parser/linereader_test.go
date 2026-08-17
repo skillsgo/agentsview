@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -170,4 +171,21 @@ func TestReadCodexJSONLReaderReusesWorkspace(t *testing.T) {
 
 	require.NoError(t, readErr)
 	assert.LessOrEqual(t, allocs, 1.0)
+}
+
+func TestLineReaderPoolRetainsBoundedWorkspaceAcrossGC(t *testing.T) {
+	for len(lineReaderPool) > 0 {
+		<-lineReaderPool
+	}
+	lr := newLineReader(strings.NewReader(strings.Repeat("x", 1<<20)+"\n"), 2<<20)
+	_, ok := lr.nextBytes()
+	require.True(t, ok)
+	require.GreaterOrEqual(t, cap(lr.buf), 1<<20)
+	releaseLineReader(lr)
+	runtime.GC()
+
+	reused := newLineReader(strings.NewReader("small\n"), 2<<20)
+	assert.Same(t, lr, reused)
+	assert.GreaterOrEqual(t, cap(reused.buf), 1<<20)
+	releaseLineReader(reused)
 }
