@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/skillsgo/agentsview/internal/config"
 	"github.com/skillsgo/agentsview/internal/db"
@@ -23,6 +26,20 @@ type Archive struct {
 	db      *db.DB
 	engine  *avsync.Engine
 	service service.SessionService
+	roots   []string
+}
+
+type BackgroundSyncOptions struct {
+	Debounce     time.Duration
+	PollInterval time.Duration
+	OnComplete   func(SyncResult, error)
+}
+
+type BackgroundSync struct {
+	cancel  context.CancelFunc
+	done    chan struct{}
+	watcher *avsync.Watcher
+	once    sync.Once
 }
 
 func Open(c Config) (*Archive, error) {
@@ -54,7 +71,22 @@ func Open(c Config) (*Archive, error) {
 		return nil, fmt.Errorf("sdk: open archive: %w", err)
 	}
 	engine := avsync.NewEngine(database, avsync.EngineConfig{AgentDirs: d.AgentDirs, SourceMachines: d.SourceMachines, DisabledAgents: disabled, Machine: machine, BlockedResultCategories: d.ResultContentBlockedCategories, ProviderFactories: d.LocalProviderFactories()})
-	return &Archive{database, engine, service.NewDirectBackend(database, engine)}, nil
+	var roots []string
+	seenRoots := map[string]struct{}{}
+	for _, dirs := range d.AgentDirs {
+		for _, dir := range dirs {
+			dir = strings.TrimSpace(dir)
+			if dir == "" {
+				continue
+			}
+			if _, exists := seenRoots[dir]; exists {
+				continue
+			}
+			seenRoots[dir] = struct{}{}
+			roots = append(roots, dir)
+		}
+	}
+	return &Archive{database, engine, service.NewDirectBackend(database, engine), roots}, nil
 }
 func knownAgent(name string) (parser.AgentType, bool) {
 	want := parser.AgentType(strings.ToLower(strings.TrimSpace(name)))
@@ -87,6 +119,81 @@ func (a *Archive) Sync(ctx context.Context) (SyncResult, error) {
 	s := a.engine.SyncAll(ctx, nil)
 	r := SyncResult{s.TotalSessions, s.Synced, s.Skipped, s.Failed, s.Tombstoned, s.Aborted, append([]string(nil), s.Warnings...)}
 	return r, ctx.Err()
+}
+
+// StartBackgroundSync starts one concurrent initial archive sync, collects
+// filesystem events while it runs, and then applies bounded incremental
+// batches for the lifetime of ctx. Polling is retained as a correctness
+// fallback for missing roots and watcher coverage loss.
+func (a *Archive) StartBackgroundSync(
+	ctx context.Context, options BackgroundSyncOptions,
+) (*BackgroundSync, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	if options.Debounce <= 0 {
+		options.Debounce = 300 * time.Millisecond
+	}
+	if options.PollInterval <= 0 {
+		options.PollInterval = 5 * time.Minute
+	}
+	backgroundCtx, cancel := context.WithCancel(ctx)
+	recovery := &avsync.WatchRecoveryScope{AvailableRoots: append([]string(nil), a.roots...)}
+	notify := func(result SyncResult, err error) {
+		if options.OnComplete != nil {
+			options.OnComplete(result, err)
+		}
+	}
+	watcher, err := avsync.NewWatcherWithCallback(
+		options.Debounce, options.Debounce,
+		func(callbackCtx context.Context, batch avsync.WatchBatch) error {
+			err := avsync.ApplyWatchBatch(callbackCtx, a.engine, batch, recovery)
+			notify(SyncResult{}, err)
+			return err
+		}, nil, avsync.WatcherOptions{},
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("sdk: create archive watcher: %w", err)
+	}
+	for _, root := range a.roots {
+		if _, statErr := os.Stat(root); statErr == nil {
+			watcher.WatchRecursive(root)
+		}
+	}
+	if err := watcher.StartCollecting(); err != nil {
+		cancel()
+		watcher.Stop()
+		return nil, fmt.Errorf("sdk: start archive watcher: %w", err)
+	}
+	background := &BackgroundSync{cancel: cancel, done: make(chan struct{}), watcher: watcher}
+	go func() {
+		defer close(background.done)
+		result, syncErr := a.Sync(backgroundCtx)
+		notify(result, syncErr)
+		watcher.OpenDispatch()
+		ticker := time.NewTicker(options.PollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-backgroundCtx.Done():
+				watcher.Stop()
+				return
+			case <-ticker.C:
+				result, syncErr = a.Sync(backgroundCtx)
+				notify(result, syncErr)
+			}
+		}
+	}()
+	return background, nil
+}
+
+func (b *BackgroundSync) Close() {
+	if b == nil {
+		return
+	}
+	b.once.Do(func() { b.cancel() })
+	<-b.done
 }
 func (a *Archive) Sessions(ctx context.Context, q SessionQuery) (SessionPage, error) {
 	if err := a.ready(); err != nil {
