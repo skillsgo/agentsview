@@ -12,9 +12,80 @@ import (
 )
 
 const (
-	contentCodecRaw  = 0
-	contentCodecZstd = 1
+	contentCodecRaw         = 0
+	contentCodecZstd        = 1
+	contentRefCountStatsKey = "agent_content_refcount_v1"
 )
+
+type agentContentReference struct {
+	table   string
+	columns []string
+}
+
+var agentContentReferences = []agentContentReference{
+	{table: "messages", columns: []string{"content_object_id", "thinking_object_id"}},
+	{table: "tool_calls", columns: []string{"input_object_id", "result_object_id"}},
+	{table: "tool_result_events", columns: []string{"content_object_id"}},
+}
+
+// installAgentContentLifecycleLocked makes content object ownership exact.
+// Reference counts avoid five reverse indexes and let deletes reclaim an
+// object in O(1). The triggers are derived from the authoritative reference
+// list so adding another Agent body cannot silently omit lifecycle handling.
+func installAgentContentLifecycleLocked(w *writerHandle) error {
+	for _, ref := range agentContentReferences {
+		for _, event := range []string{"ai", "ad", "au"} {
+			if _, err := w.Exec("DROP TRIGGER IF EXISTS content_ref_" + ref.table + "_" + event); err != nil {
+				return fmt.Errorf("dropping Agent content lifecycle trigger: %w", err)
+			}
+		}
+		var deleteBody, updateBody strings.Builder
+		for _, column := range ref.columns {
+			fmt.Fprintf(&deleteBody, "UPDATE content_objects SET ref_count = ref_count - 1 WHERE id = OLD.%s;\n", column)
+			// Update paths reserve every NEW reference before issuing SQL.
+			// Always release OLD, including OLD == NEW, so metadata-only
+			// updates do not leak the reservation.
+			fmt.Fprintf(&updateBody, "UPDATE content_objects SET ref_count = ref_count - 1 WHERE id = OLD.%s;\n", column)
+		}
+		oldIDs := make([]string, 0, len(ref.columns))
+		for _, column := range ref.columns {
+			oldIDs = append(oldIDs, "OLD."+column)
+		}
+		prune := "DELETE FROM content_objects WHERE ref_count = 0 AND id IN (" + strings.Join(oldIDs, ",") + ");\n"
+		statements := []string{
+			fmt.Sprintf("CREATE TRIGGER content_ref_%s_ad AFTER DELETE ON %s BEGIN\n%s%sEND", ref.table, ref.table, deleteBody.String(), prune),
+			fmt.Sprintf("CREATE TRIGGER content_ref_%s_au AFTER UPDATE OF %s ON %s BEGIN\n%s%sEND", ref.table, strings.Join(ref.columns, ","), ref.table, updateBody.String(), prune),
+		}
+		for _, statement := range statements {
+			if _, err := w.Exec(statement); err != nil {
+				return fmt.Errorf("installing Agent content lifecycle trigger: %w", err)
+			}
+		}
+	}
+
+	var initialized int
+	if err := w.QueryRow("SELECT count(*) FROM stats WHERE key = ?", contentRefCountStatsKey).Scan(&initialized); err != nil {
+		return fmt.Errorf("checking Agent content reference counts: %w", err)
+	}
+	if initialized != 0 {
+		return nil
+	}
+	if _, err := w.Exec(`UPDATE content_objects SET ref_count =
+		(SELECT count(*) FROM messages WHERE content_object_id = content_objects.id) +
+		(SELECT count(*) FROM messages WHERE thinking_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_calls WHERE input_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_calls WHERE result_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_result_events WHERE content_object_id = content_objects.id)`); err != nil {
+		return fmt.Errorf("backfilling Agent content reference counts: %w", err)
+	}
+	if _, err := w.Exec("DELETE FROM content_objects WHERE ref_count = 0"); err != nil {
+		return fmt.Errorf("pruning unreferenced Agent content: %w", err)
+	}
+	if _, err := w.Exec("INSERT INTO stats(key, value) VALUES (?, '1')", contentRefCountStatsKey); err != nil {
+		return fmt.Errorf("recording Agent content reference counts: %w", err)
+	}
+	return nil
+}
 
 // prepareAgentContentRefsTx writes every non-empty Agent body into the
 // content-addressed physical layer and attaches private locators to the
@@ -78,6 +149,11 @@ func putAgentContentTx(
 		"SELECT id FROM content_objects WHERE digest = ?", digest[:],
 	).Scan(&id)
 	if err == nil {
+		if _, err := tx.Exec(
+			"UPDATE content_objects SET ref_count = ref_count + 1 WHERE id = ?", id,
+		); err != nil {
+			return nil, fmt.Errorf("reserving Agent content reference: %w", err)
+		}
 		return &id, nil
 	}
 	if err != sql.ErrNoRows {
@@ -85,7 +161,7 @@ func putAgentContentTx(
 	}
 	codec, payload := encodeContent(encoder, raw)
 	result, err := tx.Exec(`INSERT OR IGNORE INTO content_objects
-		(digest, raw_size, codec, payload) VALUES (?, ?, ?, ?)`,
+		(digest, raw_size, codec, payload, ref_count) VALUES (?, ?, ?, ?, 1)`,
 		digest[:], len(raw), codec, payload)
 	if err != nil {
 		return nil, fmt.Errorf("inserting Agent content: %w", err)
@@ -104,6 +180,11 @@ func putAgentContentTx(
 		"SELECT id FROM content_objects WHERE digest = ?", digest[:],
 	).Scan(&id); err != nil {
 		return nil, fmt.Errorf("resolving concurrent Agent content: %w", err)
+	}
+	if _, err := tx.Exec(
+		"UPDATE content_objects SET ref_count = ref_count + 1 WHERE id = ?", id,
+	); err != nil {
+		return nil, fmt.Errorf("reserving concurrent Agent content reference: %w", err)
 	}
 	return &id, nil
 }

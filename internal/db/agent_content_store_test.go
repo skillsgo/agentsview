@@ -83,6 +83,52 @@ func TestAgentContentStoreSkipsEmptyBodies(t *testing.T) {
 	assert.Nil(t, resultID)
 }
 
+func TestAgentContentStoreReclaimsOnlyUnreferencedBodies(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "content-owner-a", "project")
+	insertSession(t, database, "content-owner-b", "project")
+	for _, sessionID := range []string{"content-owner-a", "content-owner-b"} {
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: sessionID, Ordinal: 0, Role: "user", Content: "shared body",
+		}}))
+	}
+
+	var objectID int64
+	var refs int
+	require.NoError(t, database.getReader().QueryRow(
+		"SELECT id, ref_count FROM content_objects",
+	).Scan(&objectID, &refs))
+	assert.Equal(t, 2, refs)
+	require.NoError(t, database.ReplaceSessionMessages("content-owner-a", []Message{{
+		SessionID: "content-owner-a", Ordinal: 0, Role: "user",
+		Content: "shared body", Timestamp: "2026-08-17T00:00:00Z",
+	}}))
+	require.NoError(t, database.getReader().QueryRow(
+		"SELECT ref_count FROM content_objects WHERE id = ?", objectID,
+	).Scan(&refs))
+	assert.Equal(t, 2, refs, "in-place updates must not leak reservations")
+
+	require.NoError(t, database.DeleteSession("content-owner-a"))
+	require.NoError(t, database.getReader().QueryRow(
+		"SELECT ref_count FROM content_objects WHERE id = ?", objectID,
+	).Scan(&refs))
+	assert.Equal(t, 1, refs)
+
+	require.NoError(t, database.DeleteSession("content-owner-b"))
+	var objects int
+	require.NoError(t, database.getReader().QueryRow(
+		"SELECT count(*) FROM content_objects WHERE id = ?", objectID,
+	).Scan(&objects))
+	assert.Zero(t, objects)
+	if database.hasContentFTS() {
+		var projected int
+		require.NoError(t, database.getReader().QueryRow(
+			"SELECT count(*) FROM content_fts WHERE rowid = ?", objectID,
+		).Scan(&projected))
+		assert.Zero(t, projected)
+	}
+}
+
 func TestAgentContentStoreHydratesFromAuthoritativeObjects(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "hydrate-content", "project")

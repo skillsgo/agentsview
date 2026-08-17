@@ -490,6 +490,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
     tokenize='porter unicode61'
 );
 
+CREATE TRIGGER IF NOT EXISTS content_objects_ad AFTER DELETE ON content_objects BEGIN
+    DELETE FROM content_fts WHERE rowid = old.id;
+END;
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
     content='messages',
@@ -2222,6 +2226,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
 		},
 		{
+			"content_objects", "ref_count",
+			"ALTER TABLE content_objects ADD COLUMN ref_count INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0)",
+		},
+		{
 			"messages", "content_object_id",
 			"ALTER TABLE messages ADD COLUMN content_object_id INTEGER REFERENCES content_objects(id)",
 		},
@@ -2516,6 +2524,9 @@ func (db *DB) migrateColumns() error {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
 	if err := applySchemaColumnMigrations(w); err != nil {
+		return err
+	}
+	if err := installAgentContentLifecycleLocked(w); err != nil {
 		return err
 	}
 	if _, err := w.Exec(artifactSessionQueueTriggerCreatesSQL); err != nil {

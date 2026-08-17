@@ -112,11 +112,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 -- tables retain queryable Agent facts and refer to exact compressed bodies.
 -- Search text is a rebuildable FTS projection, never a second source of truth.
 CREATE TABLE IF NOT EXISTS content_objects (
-    id          INTEGER PRIMARY KEY,
+    -- Object IDs participate in durable identity (pins and references), so a
+    -- reclaimed ID must never be assigned to unrelated content.
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
     digest      BLOB NOT NULL UNIQUE,
     raw_size    INTEGER NOT NULL CHECK (raw_size > 0),
     codec       INTEGER NOT NULL,
-    payload     BLOB NOT NULL
+    payload     BLOB NOT NULL,
+    ref_count   INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0)
 );
 
 -- Messages table with ordinal for efficient range queries

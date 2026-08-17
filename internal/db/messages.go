@@ -768,6 +768,16 @@ func insertMessagesTx(
 	if err := prepareAgentContentRefsTx(tx, msgs); err != nil {
 		return nil, err
 	}
+	return insertPreparedMessagesTx(tx, msgs)
+}
+
+// insertPreparedMessagesTx inserts rows whose content references were already
+// reserved by prepareAgentContentRefsTx. Full replacement prepares before
+// deleting the old rows so identical objects remain alive and keep their
+// durable IDs throughout the transaction.
+func insertPreparedMessagesTx(
+	tx *sql.Tx, msgs []Message,
+) ([]int64, error) {
 	ids := make([]int64, len(msgs))
 	nextID, err := nextMessageIDTx(tx)
 	if err != nil {
@@ -1288,13 +1298,16 @@ func replaceSessionMessagesTx(
 	if err != nil {
 		return err
 	}
+	if err := prepareAgentContentRefsTx(tx, msgs); err != nil {
+		return err
+	}
 
 	if err := deleteSessionMessagesTx(tx, sessionID); err != nil {
 		return err
 	}
 
 	if len(msgs) > 0 {
-		ids, err := insertMessagesTx(tx, msgs)
+		ids, err := insertPreparedMessagesTx(tx, msgs)
 		if err != nil {
 			return err
 		}

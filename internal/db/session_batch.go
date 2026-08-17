@@ -387,11 +387,16 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
+	contentPrepared := false
 	if replaceMessages && sessionExists {
 		pins, err = savePinsTx(tx, write.Session.ID)
 		if err != nil {
 			return 0, err
 		}
+		if err := prepareAgentContentRefsTx(tx, msgs); err != nil {
+			return 0, err
+		}
+		contentPrepared = true
 		if err := deleteSessionMessagesTx(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
@@ -408,7 +413,13 @@ func writeOneSessionBatchTx(
 	}
 
 	if len(msgs) > 0 {
-		ids, err := insertMessagesTx(tx, msgs)
+		var ids []int64
+		var err error
+		if contentPrepared {
+			ids, err = insertPreparedMessagesTx(tx, msgs)
+		} else {
+			ids, err = insertMessagesTx(tx, msgs)
+		}
 		if err != nil {
 			return 0, err
 		}
