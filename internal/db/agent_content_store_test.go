@@ -32,6 +32,14 @@ func TestAgentContentStoreDualWritesExactSharedBodies(t *testing.T) {
 		"SELECT count(*) FROM content_objects",
 	).Scan(&objects))
 	assert.Equal(t, 4, objects)
+	if database.HasFTS() {
+		var projected int
+		require.NoError(t, database.getReader().QueryRow(
+			"SELECT count(*) FROM content_fts",
+		).Scan(&projected))
+		assert.Equal(t, objects, projected,
+			"each unique object should have one search projection")
+	}
 
 	var firstMessageID, secondMessageID int64
 	require.NoError(t, database.getReader().QueryRow(`SELECT
@@ -115,4 +123,17 @@ func TestAgentContentStoreHydratesFromAuthoritativeObjects(t *testing.T) {
 	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "authoritative event",
 		messages[0].ToolCalls[0].ResultEvents[0].Content)
+	if database.HasFTS() {
+		var units []EmbeddableUnit
+		_, err := database.ScanEmbeddableUnits(
+			context.Background(), "", true,
+			func(unit EmbeddableUnit) error {
+				units = append(units, unit)
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		require.Len(t, units, 1)
+		assert.Equal(t, "authoritative message", units[0].Content)
+	}
 }

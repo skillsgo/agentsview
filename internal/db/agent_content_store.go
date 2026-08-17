@@ -95,6 +95,9 @@ func putAgentContentTx(
 		if err != nil {
 			return nil, fmt.Errorf("reading Agent content id: %w", err)
 		}
+		if err := projectAgentContentTx(tx, id, content); err != nil {
+			return nil, err
+		}
 		return &id, nil
 	}
 	if err := tx.QueryRow(
@@ -103,6 +106,24 @@ func putAgentContentTx(
 		return nil, fmt.Errorf("resolving concurrent Agent content: %w", err)
 	}
 	return &id, nil
+}
+
+func projectAgentContentTx(tx *sql.Tx, id int64, content string) error {
+	var exists int
+	if err := tx.QueryRow(`SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
+		return fmt.Errorf("probing Agent content projection: %w", err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(
+		"INSERT OR REPLACE INTO content_fts(rowid, content) VALUES (?, ?)",
+		id, content,
+	); err != nil {
+		return fmt.Errorf("projecting Agent content: %w", err)
+	}
+	return nil
 }
 
 func readAgentContent(

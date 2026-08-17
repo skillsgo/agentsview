@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	_ "embed"
 	"errors"
@@ -476,6 +478,11 @@ const ClassifierHashKey = "is_automated_classifier_hash"
 var schemaSQL string
 
 const schemaFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
+    content,
+    tokenize='porter unicode61'
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
     content='messages',
@@ -3934,6 +3941,7 @@ func (db *DB) DropFTS() error {
 		"DROP TRIGGER IF EXISTS messages_ad",
 		"DROP TRIGGER IF EXISTS messages_au",
 		"DROP TABLE IF EXISTS messages_fts",
+		"DROP TABLE IF EXISTS content_fts",
 	}
 	w := db.getWriter()
 	for _, s := range stmts {
@@ -3952,6 +3960,9 @@ func (db *DB) RebuildFTS() error {
 	if _, err := w.Exec(schemaFTS); err != nil {
 		return fmt.Errorf("recreate fts: %w", err)
 	}
+	if err := rebuildContentFTSLocked(w); err != nil {
+		return err
+	}
 	_, err := w.Exec(
 		"INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
 	)
@@ -3959,6 +3970,63 @@ func (db *DB) RebuildFTS() error {
 		return fmt.Errorf("rebuild fts index: %w", err)
 	}
 	return nil
+}
+
+func rebuildContentFTSLocked(w *writerHandle) error {
+	if _, err := w.Exec("DELETE FROM content_fts"); err != nil {
+		return fmt.Errorf("clearing Agent content FTS: %w", err)
+	}
+	var afterID int64
+	for {
+		rows, err := w.Query(`SELECT id, digest, raw_size, codec, payload
+			FROM content_objects WHERE id > ? ORDER BY id LIMIT 400`, afterID)
+		if err != nil {
+			return fmt.Errorf("querying Agent content for FTS: %w", err)
+		}
+		type projection struct {
+			id      int64
+			content string
+		}
+		batch := make([]projection, 0, 400)
+		for rows.Next() {
+			var id int64
+			var digest, payload []byte
+			var rawSize, codec int
+			if err := rows.Scan(&id, &digest, &rawSize, &codec, &payload); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scanning Agent content for FTS: %w", err)
+			}
+			raw, err := decodeAgentContentPayload(codec, payload)
+			if err != nil {
+				_ = rows.Close()
+				return err
+			}
+			actual := sha256.Sum256(raw)
+			if len(raw) != rawSize || len(digest) != sha256.Size ||
+				subtle.ConstantTimeCompare(actual[:], digest) != 1 {
+				_ = rows.Close()
+				return fmt.Errorf("Agent content %d failed integrity verification", id)
+			}
+			batch = append(batch, projection{id: id, content: string(raw)})
+			afterID = id
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing Agent content FTS scan: %w", err)
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		args := make([]any, 0, len(batch)*2)
+		for _, item := range batch {
+			args = append(args, item.id, item.content)
+		}
+		if _, err := w.Exec(
+			"INSERT INTO content_fts(rowid, content) VALUES "+
+				multiRowPlaceholders(len(batch), 2), args...,
+		); err != nil {
+			return fmt.Errorf("inserting Agent content FTS: %w", err)
+		}
+	}
 }
 
 // HasFTS checks if Full Text Search is available.
@@ -4034,15 +4102,25 @@ func (db *DB) init() error {
 		return fmt.Errorf("checking fts table: %w", err)
 	}
 	hadFTS := ftsCount > 0
+	var contentFTSCount int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='content_fts'",
+	).Scan(&contentFTSCount); err != nil {
+		return fmt.Errorf("checking Agent content FTS table: %w", err)
+	}
+	hadContentFTS := contentFTSCount > 0
 
 	// Attempt to initialize FTS. Failure is non-fatal
 	// (might be missing module).
+	ftsAvailable := true
 	if _, err := w.Exec(schemaFTS); err != nil {
 		if !strings.Contains(
 			err.Error(), "no such module",
 		) {
 			return fmt.Errorf("initializing FTS: %w", err)
 		}
+		ftsAvailable = false
 	} else if !hadFTS {
 		// Schema init succeeded and we didn't have FTS
 		// before. Populate the index for existing messages.
@@ -4051,6 +4129,11 @@ func (db *DB) init() error {
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
+		}
+	}
+	if ftsAvailable && !hadContentFTS {
+		if err := rebuildContentFTSLocked(w); err != nil {
+			return fmt.Errorf("backfilling Agent content FTS: %w", err)
 		}
 	}
 

@@ -483,25 +483,38 @@ func (db *DB) ScanEmbeddableUnits(
 	ctx context.Context, since string, includeAutomated bool,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
+	contentExpr := "m.content"
+	contentJoin := ""
+	var hasContentFTS int
+	if err := db.getReader().QueryRow(`SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'content_fts'`).Scan(&hasContentFTS); err != nil {
+		return "", fmt.Errorf("probing Agent content projection: %w", err)
+	}
+	if hasContentFTS > 0 {
+		contentExpr = "content_fts.content"
+		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
+	}
 	preds := []string{
 		"m.role IN ('user', 'assistant')",
 		"m.is_system = 0",
 		"s.deleted_at IS NULL",
-		SystemPrefixSQL("m.content", "m.role"),
+		SystemPrefixSQL(contentExpr, "m.role"),
 	}
 	if !includeAutomated {
 		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
 	}
 
-	query := `
-		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
+	query := fmt.Sprintf(`
+		SELECT m.session_id, m.role, m.source_uuid, m.ordinal,
+		       %s,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
+		%s
 		JOIN sessions s ON s.id = m.session_id
-		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
-		` + optionalSinceClause(since) + `
-		ORDER BY m.session_id, m.ordinal`
+		WHERE `+strings.Join(preds, "\n\t\t  AND ")+`
+		`+optionalSinceClause(since)+`
+		ORDER BY m.session_id, m.ordinal`, contentExpr, contentJoin)
 
 	args := []any{}
 	if since != "" {
