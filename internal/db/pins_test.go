@@ -72,6 +72,25 @@ func TestListPinnedMessages_NoFilter(t *testing.T) {
 	require.Len(t, pins, 2)
 }
 
+func TestListPinnedMessagesHydratesAuthoritativeContent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "pin-content", "alpha")
+	insertMessages(t, d, userMsg("pin-content", 0, "authoritative pin body"))
+	pinFirstMessage(t, d, "pin-content")
+	_, err := d.getWriter().Exec(
+		"UPDATE messages SET content = 'stale inline body' WHERE session_id = ?",
+		"pin-content",
+	)
+	require.NoError(t, err)
+
+	pins, err := d.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	require.NotNil(t, pins[0].Content)
+	assert.Equal(t, "authoritative pin body", *pins[0].Content)
+}
+
 func TestListPinnedMessages_ProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

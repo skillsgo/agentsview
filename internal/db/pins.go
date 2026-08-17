@@ -22,6 +22,7 @@ type PinnedMessage struct {
 	SessionAgent        *string `json:"session_agent,omitempty"`
 	SessionDisplayName  *string `json:"session_display_name,omitempty"`
 	SessionFirstMessage *string `json:"session_first_message,omitempty"`
+	contentObjectID     *int64
 }
 
 const pinnedBaseCols = `id, session_id, message_id, ordinal, note, created_at`
@@ -40,7 +41,7 @@ func scanPinnedRowWithContent(rs rowScanner) (PinnedMessage, error) {
 	err := rs.Scan(
 		&p.ID, &p.SessionID, &p.MessageID,
 		&p.Ordinal, &p.Note, &p.CreatedAt,
-		&p.Content, &p.Role,
+		&p.contentObjectID, &p.Role,
 		&p.SessionProject, &p.SessionAgent, &p.SessionDisplayName,
 		&p.SessionFirstMessage,
 	)
@@ -119,7 +120,7 @@ func (db *DB) ListPinnedMessages(
 		// session metadata (project, agent, display_name) so the
 		// frontend doesn't need a separate lookup.
 		query = `SELECT p.id, p.session_id, p.message_id, p.ordinal,
-				p.note, p.created_at, m.content, m.role,
+				p.note, p.created_at, m.content_object_id, m.role,
 				s.project, s.agent, COALESCE(s.display_name, s.session_name), s.first_message
 			FROM pinned_messages p
 			JOIN sessions s ON p.session_id = s.id AND s.deleted_at IS NULL
@@ -152,7 +153,30 @@ func (db *DB) ListPinnedMessages(
 		}
 		pins = append(pins, p)
 	}
-	return pins, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if !withContent {
+		return pins, nil
+	}
+	ids := make([]int64, 0, len(pins))
+	for i := range pins {
+		if pins[i].contentObjectID != nil {
+			ids = append(ids, *pins[i].contentObjectID)
+		}
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pins {
+		if pins[i].contentObjectID != nil {
+			content := contents[*pins[i].contentObjectID]
+			pins[i].Content = &content
+		}
+		pins[i].contentObjectID = nil
+	}
+	return pins, nil
 }
 
 // PinCurationEntry is one pinned message's full curation-relevant identity:

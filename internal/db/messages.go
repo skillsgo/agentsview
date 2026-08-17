@@ -1135,15 +1135,17 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 
 // savedPin captures the message identity needed to re-attach a pin
 // after a full message replacement. source_uuid is preferred because
-// it survives ordinal shifts. Role and content, together with the
+// it survives ordinal shifts. Role and content_object_id, together with the
 // pin's occurrence rank inside its identity group, guard the
-// fallback used for legacy rows and ambiguous source UUIDs: rank
+// fallback used for ambiguous source UUIDs: rank
 // follows a message across ordinal shifts that leave the group
-// intact, where a saved ordinal would name a different occurrence.
+// intact, where a saved ordinal would name a different occurrence. The
+// inline content fallback exists only for rows predating Agent Store.
 type savedPin struct {
 	sourceUUID          string
 	role                string
 	content             string
+	contentObjectID     sql.NullInt64
 	ordinal             int
 	sourceUUIDCount     int
 	sourceIdentityCount int
@@ -1576,11 +1578,12 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 	// messages are deleted below. source_uuid comes from the joined
 	// message row; LEFT JOIN keeps pins on legacy rows whose
 	// message_id no longer resolves cleanly. The counts capture whether
-	// source_uuid, or source_uuid plus role and content, uniquely identify
+	// source_uuid, or source_uuid plus role and content object, uniquely identify
 	// the old message before it is deleted.
 	pinRows, err := tx.Query(`
 		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
 			COALESCE(m.role, ''), COALESCE(m.content, ''),
+			m.content_object_id,
 			CASE WHEN m.id IS NULL THEN 0 ELSE 1 END,
 			(
 				SELECT COUNT(*)
@@ -1595,7 +1598,10 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				WHERE same_identity.session_id = m.session_id
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
-					AND same_identity.content = m.content
+					AND (same_identity.content_object_id = m.content_object_id
+						OR (same_identity.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND same_identity.content = m.content))
 					AND m.source_uuid != ''
 			),
 			(
@@ -1604,7 +1610,10 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				WHERE identity_rank.session_id = m.session_id
 					AND identity_rank.source_uuid = m.source_uuid
 					AND identity_rank.role = m.role
-					AND identity_rank.content = m.content
+					AND (identity_rank.content_object_id = m.content_object_id
+						OR (identity_rank.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND identity_rank.content = m.content))
 					AND identity_rank.ordinal <= m.ordinal
 					AND m.source_uuid != ''
 			),
@@ -1613,7 +1622,10 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				FROM messages legacy_identity
 				WHERE legacy_identity.session_id = m.session_id
 					AND legacy_identity.role = m.role
-					AND legacy_identity.content = m.content
+					AND (legacy_identity.content_object_id = m.content_object_id
+						OR (legacy_identity.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND legacy_identity.content = m.content))
 					AND legacy_identity.is_system = 0
 			),
 			(
@@ -1621,7 +1633,10 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				FROM messages legacy_rank
 				WHERE legacy_rank.session_id = m.session_id
 					AND legacy_rank.role = m.role
-					AND legacy_rank.content = m.content
+					AND (legacy_rank.content_object_id = m.content_object_id
+						OR (legacy_rank.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND legacy_rank.content = m.content))
 					AND legacy_rank.is_system = 0
 					AND legacy_rank.ordinal <= m.ordinal
 			),
@@ -1640,6 +1655,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 		var sp savedPin
 		if err := pinRows.Scan(
 			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
+			&sp.contentObjectID,
 			&sp.messageFound, &sp.sourceUUIDCount,
 			&sp.sourceIdentityCount, &sp.sourceIdentityRank,
 			&sp.legacyIdentityCount, &sp.legacyIdentityRank,
@@ -1734,14 +1750,19 @@ func restorePinBySourceUUIDTx(
 		FROM messages m
 		WHERE m.session_id = ?
 			AND m.source_uuid = ?
-			AND m.role = ? AND m.content = ?
+			AND m.role = ?
+			AND (m.content_object_id = ? OR
+				(? IS NULL AND m.content_object_id IS NULL AND m.content = ?))
 			AND (
 				SELECT COUNT(*)
 				FROM messages same_identity
 				WHERE same_identity.session_id = m.session_id
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
-					AND same_identity.content = m.content
+					AND (same_identity.content_object_id = m.content_object_id
+						OR (same_identity.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND same_identity.content = m.content))
 			) = ?
 			AND (
 				SELECT COUNT(*)
@@ -1749,11 +1770,14 @@ func restorePinBySourceUUIDTx(
 				WHERE identity_rank.session_id = m.session_id
 					AND identity_rank.source_uuid = m.source_uuid
 					AND identity_rank.role = m.role
-					AND identity_rank.content = m.content
+					AND (identity_rank.content_object_id = m.content_object_id
+						OR (identity_rank.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND identity_rank.content = m.content))
 					AND identity_rank.ordinal <= m.ordinal
 			) = ?`,
 		sessionID, sp.note, sp.createdAt, sessionID,
-		sp.sourceUUID, sp.role, sp.content,
+		sp.sourceUUID, sp.role, sp.contentObjectID, sp.contentObjectID, sp.content,
 		sp.sourceIdentityCount, sp.sourceIdentityRank,
 	); err != nil {
 		return fmt.Errorf(
@@ -1782,13 +1806,18 @@ func restoreLegacyPinByRankTx(
 		FROM messages m
 		WHERE m.session_id = ?
 			AND m.is_system = 0
-			AND m.role = ? AND m.content = ?
+			AND m.role = ?
+			AND (m.content_object_id = ? OR
+				(? IS NULL AND m.content_object_id IS NULL AND m.content = ?))
 			AND (
 				SELECT COUNT(*)
 				FROM messages legacy_identity
 				WHERE legacy_identity.session_id = m.session_id
 					AND legacy_identity.role = m.role
-					AND legacy_identity.content = m.content
+					AND (legacy_identity.content_object_id = m.content_object_id
+						OR (legacy_identity.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND legacy_identity.content = m.content))
 					AND legacy_identity.is_system = 0
 			) = ?
 			AND (
@@ -1796,12 +1825,15 @@ func restoreLegacyPinByRankTx(
 				FROM messages legacy_rank
 				WHERE legacy_rank.session_id = m.session_id
 					AND legacy_rank.role = m.role
-					AND legacy_rank.content = m.content
+					AND (legacy_rank.content_object_id = m.content_object_id
+						OR (legacy_rank.content_object_id IS NULL
+							AND m.content_object_id IS NULL
+							AND legacy_rank.content = m.content))
 					AND legacy_rank.is_system = 0
 					AND legacy_rank.ordinal <= m.ordinal
 			) = ?`,
 		sessionID, sp.note, sp.createdAt, sessionID,
-		sp.role, sp.content,
+		sp.role, sp.contentObjectID, sp.contentObjectID, sp.content,
 		sp.legacyIdentityCount, sp.legacyIdentityRank,
 	)
 	if err != nil {
