@@ -171,10 +171,11 @@ func (db *DB) MessageContentHashFingerprints(
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(`
-			SELECT session_id, ordinal, content, content_length
-			 FROM messages
-			 WHERE session_id IN (`+ph+`)
-			 ORDER BY session_id, ordinal ASC`,
+			SELECT m.session_id, m.ordinal, co.digest, m.content_length
+			 FROM messages m
+			 LEFT JOIN content_objects co ON co.id = m.content_object_id
+			 WHERE m.session_id IN (`+ph+`)
+			 ORDER BY m.session_id, m.ordinal ASC`,
 			args...,
 		)
 		if err != nil {
@@ -183,15 +184,16 @@ func (db *DB) MessageContentHashFingerprints(
 		defer rows.Close()
 		builders := fingerprintBuilders{}
 		for rows.Next() {
-			var sessionID, content string
+			var sessionID string
+			var digest []byte
 			var ordinal, contentLength int
 			if err := rows.Scan(
-				&sessionID, &ordinal, &content, &contentLength,
+				&sessionID, &ordinal, &digest, &contentLength,
 			); err != nil {
 				return err
 			}
-			appendContentHashFingerprintRow(
-				builders.get(sessionID), ordinal, contentLength, content,
+			appendContentHashFingerprintDigest(
+				builders.get(sessionID), ordinal, contentLength, digest,
 			)
 		}
 		if err := rows.Err(); err != nil {
@@ -688,6 +690,16 @@ func appendContentHashFingerprintRow(
 	b *strings.Builder, ordinal, contentLength int, content string,
 ) {
 	sum := sha256.Sum256([]byte(SanitizeUTF8(content)))
+	fmt.Fprintf(b, "%d|%d|%x;", ordinal, contentLength, sum)
+}
+
+func appendContentHashFingerprintDigest(
+	b *strings.Builder, ordinal, contentLength int, digest []byte,
+) {
+	sum := sha256.Sum256(nil)
+	if len(digest) == sha256.Size {
+		copy(sum[:], digest)
+	}
 	fmt.Fprintf(b, "%d|%d|%x;", ordinal, contentLength, sum)
 }
 

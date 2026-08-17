@@ -2338,10 +2338,11 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 // rewrites or per-message length changes whose aggregates collide.
 func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
-		`SELECT ordinal, content, content_length
-		 FROM messages
-		 WHERE session_id = ?
-		 ORDER BY ordinal ASC`,
+		`SELECT m.ordinal, co.digest, m.content_length
+		 FROM messages m
+		 LEFT JOIN content_objects co ON co.id = m.content_object_id
+		 WHERE m.session_id = ?
+		 ORDER BY m.ordinal ASC`,
 		sessionID,
 	)
 	if err != nil {
@@ -2352,13 +2353,13 @@ func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 	var b strings.Builder
 	for rows.Next() {
 		var ordinal, contentLength int
-		var content string
+		var digest []byte
 		if err := rows.Scan(
-			&ordinal, &content, &contentLength,
+			&ordinal, &digest, &contentLength,
 		); err != nil {
 			return "", err
 		}
-		appendContentHashFingerprintRow(&b, ordinal, contentLength, content)
+		appendContentHashFingerprintDigest(&b, ordinal, contentLength, digest)
 	}
 	return b.String(), rows.Err()
 }
