@@ -287,11 +287,14 @@ func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 
 	// The tool result from the dropped carrier message is paired into
 	// the tool call's result_content.
+	mainMessages, err := database.GetAllMessages(context.Background(), "shelley:cMAIN1")
+	require.NoError(t, err, "query tool result content")
 	var resultContent string
-	require.NoError(t, database.Reader().QueryRow(
-		`SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?`,
-		"shelley:cMAIN1",
-	).Scan(&resultContent), "query tool result content")
+	for _, message := range mainMessages {
+		for _, call := range message.ToolCalls {
+			resultContent += call.ResultContent
+		}
+	}
 	assert.Contains(t, resultContent, "file1", "tool result preserved on tool call")
 
 	// Remove cGONE1 from the source DB entirely, then verify a full resync

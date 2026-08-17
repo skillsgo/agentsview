@@ -9630,16 +9630,10 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	// content in the DB. This mirrors what happens when the Go
 	// parser is updated (e.g. thinking format change) but the
 	// source files on disk are unchanged.
-	err := env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
-			"UPDATE messages SET content = ?"+
-				" WHERE session_id = ? AND ordinal = 1",
-			"stale content from old parser",
-			fullID,
-		)
-		return err
-	})
-	require.NoError(t, err, "update message content")
+	msgs[1].Content = "stale content from old parser"
+	msgs[1].ContentLength = len(msgs[1].Content)
+	require.NoError(t, env.db.ReplaceSessionMessages(fullID, msgs),
+		"update message content")
 
 	// Capture FTS state before resync so a regression that
 	// breaks FTS isn't masked by HasFTS() returning false

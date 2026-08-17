@@ -2332,9 +2332,9 @@ func TestSearch_Deduplication(t *testing.T) {
 func TestSearch_NotAvailable(t *testing.T) {
 	te := setup(t)
 	// Simulate missing FTS by dropping the virtual table.
-	// HasFTS() will return false because the query against messages_fts will fail.
+	// HasFTS() will return false because the content projection is absent.
 	err := te.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DROP TABLE IF EXISTS messages_fts")
+		_, err := tx.Exec("DROP TABLE IF EXISTS content_fts")
 		return err
 	})
 	if err != nil {

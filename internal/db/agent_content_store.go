@@ -39,26 +39,33 @@ func installAgentContentLifecycleLocked(w *writerHandle) error {
 				return fmt.Errorf("dropping Agent content lifecycle trigger: %w", err)
 			}
 		}
-		var deleteBody, updateBody strings.Builder
+		var deleteBody strings.Builder
 		for _, column := range ref.columns {
+			if _, err := w.Exec("DROP TRIGGER IF EXISTS content_ref_" + ref.table + "_au_" + column); err != nil {
+				return fmt.Errorf("dropping Agent content column trigger: %w", err)
+			}
 			fmt.Fprintf(&deleteBody, "UPDATE content_objects SET ref_count = ref_count - 1 WHERE id = OLD.%s;\n", column)
-			// Update paths reserve every NEW reference before issuing SQL.
-			// Always release OLD, including OLD == NEW, so metadata-only
-			// updates do not leak the reservation.
-			fmt.Fprintf(&updateBody, "UPDATE content_objects SET ref_count = ref_count - 1 WHERE id = OLD.%s;\n", column)
 		}
 		oldIDs := make([]string, 0, len(ref.columns))
 		for _, column := range ref.columns {
 			oldIDs = append(oldIDs, "OLD."+column)
 		}
 		prune := "DELETE FROM content_objects WHERE ref_count = 0 AND id IN (" + strings.Join(oldIDs, ",") + ");\n"
-		statements := []string{
-			fmt.Sprintf("CREATE TRIGGER content_ref_%s_ad AFTER DELETE ON %s BEGIN\n%s%sEND", ref.table, ref.table, deleteBody.String(), prune),
-			fmt.Sprintf("CREATE TRIGGER content_ref_%s_au AFTER UPDATE OF %s ON %s BEGIN\n%s%sEND", ref.table, strings.Join(ref.columns, ","), ref.table, updateBody.String(), prune),
+		if _, err := w.Exec(fmt.Sprintf(
+			"CREATE TRIGGER content_ref_%s_ad AFTER DELETE ON %s BEGIN\n%s%sEND",
+			ref.table, ref.table, deleteBody.String(), prune,
+		)); err != nil {
+			return fmt.Errorf("installing Agent content delete trigger: %w", err)
 		}
-		for _, statement := range statements {
+		for _, column := range ref.columns {
+			statement := fmt.Sprintf(
+				"CREATE TRIGGER content_ref_%s_au_%s AFTER UPDATE OF %s ON %s BEGIN\n"+
+					"UPDATE content_objects SET ref_count = ref_count - 1 WHERE id = OLD.%s;\n"+
+					"DELETE FROM content_objects WHERE ref_count = 0 AND id = OLD.%s;\nEND",
+				ref.table, column, column, ref.table, column, column,
+			)
 			if _, err := w.Exec(statement); err != nil {
-				return fmt.Errorf("installing Agent content lifecycle trigger: %w", err)
+				return fmt.Errorf("installing Agent content update trigger: %w", err)
 			}
 		}
 	}

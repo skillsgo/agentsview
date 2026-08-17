@@ -119,6 +119,16 @@ func mutateDB(
 	require.NoError(t, err, "mutate db: %s", query)
 }
 
+func mutateStoredMessages(
+	t *testing.T, env *testEnv, sessionID string, mutate func([]db.Message),
+) {
+	t.Helper()
+	messages, err := env.db.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err)
+	mutate(messages)
+	require.NoError(t, env.db.ReplaceSessionMessages(sessionID, messages))
+}
+
 // parseDiffClaudeContent builds a minimal two-message Claude session.
 func parseDiffClaudeContent(prompt, reply string) string {
 	return testjsonl.NewSessionBuilder().
@@ -260,9 +270,10 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	// Equal-length body rewrite: upper() changes the bytes without
 	// moving content_length, so neither the length aggregates nor the
 	// token fingerprint see it. Only the content hash can.
-	mutateDB(t, env,
-		"UPDATE messages SET content = upper(content)"+
-			" WHERE session_id = ? AND ordinal = 0", "pd-body")
+	mutateStoredMessages(t, env, "pd-body", func(messages []db.Message) {
+		messages[0].Content = strings.ToUpper(messages[0].Content)
+		messages[0].ContentLength = len(messages[0].Content)
+	})
 	// Aggregate collision: swapping content and content_length between
 	// the two ordinals permutes the lengths, so sum/max/min are
 	// unchanged while every per-ordinal value differs.
@@ -271,14 +282,12 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	require.NotEqual(t,
 		swapMsgs[0].ContentLength, swapMsgs[1].ContentLength,
 		"swap needs distinct lengths or the collision test is vacuous")
-	mutateDB(t, env,
-		"UPDATE messages SET content = ?, content_length = ?"+
-			" WHERE session_id = ? AND ordinal = 0",
-		swapMsgs[1].Content, swapMsgs[1].ContentLength, "pd-swap")
-	mutateDB(t, env,
-		"UPDATE messages SET content = ?, content_length = ?"+
-			" WHERE session_id = ? AND ordinal = 1",
-		swapMsgs[0].Content, swapMsgs[0].ContentLength, "pd-swap")
+	mutateStoredMessages(t, env, "pd-swap", func(messages []db.Message) {
+		messages[0].Content, messages[1].Content =
+			messages[1].Content, messages[0].Content
+		messages[0].ContentLength, messages[1].ContentLength =
+			messages[1].ContentLength, messages[0].ContentLength
+	})
 	// The parser classifies this fixture's termination; store a
 	// different non-null value so the diff is real drift, not the
 	// informational cleared-to-NULL case.
