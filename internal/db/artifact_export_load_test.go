@@ -354,6 +354,49 @@ func TestLoadArtifactExportDataDoesNotHydrateMismatchedNestedRows(t *testing.T) 
 		"nested rows from a different stored session must not bypass preflight")
 }
 
+func TestLoadArtifactExportDataHydratesAuthoritativeContent(t *testing.T) {
+	database := artifactExportLoadTestDB(t)
+	insertMessages(t, database, Message{
+		SessionID: "session", Ordinal: 0, Role: "assistant",
+		Content: "authoritative export body", ThinkingText: "authoritative thought",
+		ToolCalls: []ToolCall{{
+			ToolName: "exec", InputJSON: `{"cmd":"true"}`,
+			ResultContent: "authoritative result",
+			ResultEvents: []ToolResultEvent{{
+				Source: "tool_result", Status: "completed",
+				Content: "authoritative event",
+			}},
+		}},
+	})
+	_, err := database.getWriter().Exec(
+		"UPDATE messages SET content = 'x', thinking_text = 'x'",
+	)
+	require.NoError(t, err)
+	_, err = database.getWriter().Exec(
+		"UPDATE tool_calls SET input_json = 'x', result_content = 'x'",
+	)
+	require.NoError(t, err)
+	_, err = database.getWriter().Exec(
+		"UPDATE tool_result_events SET content = 'x'",
+	)
+	require.NoError(t, err)
+
+	data, err := database.LoadArtifactExportData(
+		t.Context(), "session", smallArtifactExportLoadLimits(),
+	)
+	require.NoError(t, err)
+	require.Len(t, data.Messages, 1)
+	message := data.Messages[0]
+	assert.Equal(t, "authoritative export body", message.Content)
+	assert.Equal(t, "authoritative thought", message.ThinkingText)
+	require.Len(t, message.ToolCalls, 1)
+	assert.Equal(t, `{"cmd":"true"}`, message.ToolCalls[0].InputJSON)
+	assert.Equal(t, "authoritative result", message.ToolCalls[0].ResultContent)
+	require.Len(t, message.ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "authoritative event",
+		message.ToolCalls[0].ResultEvents[0].Content)
+}
+
 func TestLoadArtifactExportDataAllocationIsBoundedByLimit(t *testing.T) {
 	limits := smallArtifactExportLoadLimits()
 	makeDatabase := func(t *testing.T, count int) *DB {

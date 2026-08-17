@@ -35,8 +35,10 @@ type ArtifactExportData struct {
 
 const artifactMessageRawBytesSQL = `
 	length(CAST(role AS BLOB)) +
-	length(CAST(content AS BLOB)) +
-	length(CAST(thinking_text AS BLOB)) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id),
+		length(CAST(content AS BLOB))) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = thinking_object_id),
+		length(CAST(thinking_text AS BLOB))) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB)) +
 	length(CAST(model AS BLOB)) +
 	length(CAST(token_usage AS BLOB)) +
@@ -52,9 +54,11 @@ const artifactToolCallRawBytesSQL = `
 	length(CAST(tool_name AS BLOB)) +
 	length(CAST(category AS BLOB)) +
 	length(CAST(COALESCE(tool_use_id, '') AS BLOB)) +
-	length(CAST(COALESCE(input_json, '') AS BLOB)) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = input_object_id),
+		length(CAST(COALESCE(input_json, '') AS BLOB))) +
 	length(CAST(COALESCE(skill_name, '') AS BLOB)) +
-	length(CAST(COALESCE(result_content, '') AS BLOB)) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = result_object_id),
+		length(CAST(COALESCE(result_content, '') AS BLOB))) +
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +
 	length(CAST(COALESCE(file_path, '') AS BLOB))`
 
@@ -64,7 +68,8 @@ const artifactResultEventRawBytesSQL = `
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +
 	length(CAST(source AS BLOB)) +
 	length(CAST(status AS BLOB)) +
-	length(CAST(content AS BLOB)) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id),
+		length(CAST(content AS BLOB))) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB))`
 
 const artifactUsageRawBytesSQL = `
@@ -125,6 +130,9 @@ func (db *DB) LoadArtifactExportData(
 			"session %s message count exceeds %d", sessionID, limits.Messages,
 		)
 	}
+	if err := hydrateMessageContents(ctx, tx, messages); err != nil {
+		return ArtifactExportData{}, err
+	}
 	if err := attachArtifactNestedCollectionsTx(
 		ctx, tx, sessionID, messages, limits,
 	); err != nil {
@@ -171,8 +179,9 @@ func attachArtifactNestedCollectionsTx(
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, message_id, session_id, tool_name, category,
-			tool_use_id, input_json, skill_name,
-			result_content_length, result_content, subagent_session_id,
+			tool_use_id, input_json, input_object_id, skill_name,
+			result_content_length, result_content, result_object_id,
+			subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
 		WHERE session_id = ?
@@ -184,6 +193,7 @@ func attachArtifactNestedCollectionsTx(
 	for rows.Next() {
 		var row toolCallRow
 		var toolUseID, inputJSON, skillName sql.NullString
+		var inputObjectID, resultObjectID sql.NullInt64
 		var subagentSessionID, resultContent sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
@@ -191,8 +201,9 @@ func attachArtifactNestedCollectionsTx(
 		if err := rows.Scan(
 			&row.rowID, &row.call.MessageID, &row.call.SessionID,
 			&row.call.ToolName, &row.call.Category,
-			&toolUseID, &inputJSON, &skillName,
-			&resultLen, &resultContent, &subagentSessionID,
+			&toolUseID, &inputJSON, &inputObjectID, &skillName,
+			&resultLen, &resultContent, &resultObjectID,
+			&subagentSessionID,
 			&filePath, &callIndex,
 		); err != nil {
 			_ = rows.Close()
@@ -204,6 +215,9 @@ func attachArtifactNestedCollectionsTx(
 		if inputJSON.Valid {
 			row.call.InputJSON = inputJSON.String
 		}
+		if inputObjectID.Valid {
+			row.call.inputObjectID = &inputObjectID.Int64
+		}
 		if skillName.Valid {
 			row.call.SkillName = skillName.String
 		}
@@ -212,6 +226,9 @@ func attachArtifactNestedCollectionsTx(
 		}
 		if resultContent.Valid {
 			row.call.ResultContent = resultContent.String
+		}
+		if resultObjectID.Valid {
+			row.call.resultObjectID = &resultObjectID.Int64
 		}
 		if subagentSessionID.Valid {
 			row.call.SubagentSessionID = subagentSessionID.String
@@ -236,6 +253,29 @@ func attachArtifactNestedCollectionsTx(
 			"session %s tool call count exceeds %d",
 			sessionID, limits.SessionToolCalls,
 		)
+	}
+	toolContentIDs := make([]int64, 0, len(toolCalls)*2)
+	for i := range toolCalls {
+		if toolCalls[i].call.inputObjectID != nil {
+			toolContentIDs = append(toolContentIDs, *toolCalls[i].call.inputObjectID)
+		}
+		if toolCalls[i].call.resultObjectID != nil {
+			toolContentIDs = append(toolContentIDs, *toolCalls[i].call.resultObjectID)
+		}
+	}
+	toolContents, err := loadAgentContents(ctx, tx, toolContentIDs)
+	if err != nil {
+		return err
+	}
+	for i := range toolCalls {
+		call := &toolCalls[i].call
+		if call.inputObjectID != nil {
+			call.InputJSON = toolContents[*call.inputObjectID]
+		}
+		if call.resultObjectID != nil {
+			call.ResultContent = toolContents[*call.resultObjectID]
+		}
+		call.inputObjectID, call.resultObjectID = nil, nil
 	}
 	sort.Slice(toolCalls, func(i, j int) bool {
 		if toolCalls[i].call.MessageID != toolCalls[j].call.MessageID {
@@ -263,7 +303,7 @@ func attachArtifactNestedCollectionsTx(
 	rows, err = tx.QueryContext(ctx, `
 		SELECT id, tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
+			source, status, content, content_object_id, content_length,
 			timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ?
@@ -279,6 +319,7 @@ func attachArtifactNestedCollectionsTx(
 			&row.rowID, &row.messageOrdinal, &row.callIndex,
 			&toolUseID, &agentID, &subagentSessionID,
 			&row.event.Source, &row.event.Status, &row.event.Content,
+			&row.event.contentObjectID,
 			&row.event.ContentLength, &timestamp, &row.event.EventIndex,
 		); err != nil {
 			_ = rows.Close()
@@ -310,6 +351,24 @@ func attachArtifactNestedCollectionsTx(
 			"session %s result event count exceeds %d",
 			sessionID, limits.SessionResultEvents,
 		)
+	}
+	eventContentIDs := make([]int64, 0, len(resultEvents))
+	for i := range resultEvents {
+		if resultEvents[i].event.contentObjectID != nil {
+			eventContentIDs = append(eventContentIDs,
+				*resultEvents[i].event.contentObjectID)
+		}
+	}
+	eventContents, err := loadAgentContents(ctx, tx, eventContentIDs)
+	if err != nil {
+		return err
+	}
+	for i := range resultEvents {
+		event := &resultEvents[i].event
+		if event.contentObjectID != nil {
+			event.Content = eventContents[*event.contentObjectID]
+		}
+		event.contentObjectID = nil
 	}
 	sort.Slice(resultEvents, func(i, j int) bool {
 		if resultEvents[i].messageOrdinal != resultEvents[j].messageOrdinal {
