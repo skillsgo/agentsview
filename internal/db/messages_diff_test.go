@@ -121,8 +121,8 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 	if d.HasFTS() {
 		var n int
 		require.NoError(t, d.getReader().QueryRow(
-			`SELECT count(*) FROM messages_fts
-			 WHERE messages_fts MATCH 'zqmergetoken'`,
+			`SELECT count(*) FROM content_fts
+			 WHERE content_fts MATCH 'zqmergetoken'`,
 		).Scan(&n))
 		assert.Equal(t, 1, n,
 			"FTS index must cover the updated row content")

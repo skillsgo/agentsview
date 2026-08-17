@@ -477,13 +477,6 @@ const ClassifierHashKey = "is_automated_classifier_hash"
 //go:embed schema.sql
 var schemaSQL string
 
-const messagesADTriggerDDL = `
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
-`
-
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
     content,
@@ -494,22 +487,6 @@ CREATE TRIGGER IF NOT EXISTS content_objects_ad AFTER DELETE ON content_objects 
     DELETE FROM content_fts WHERE rowid = old.id;
 END;
 
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-    content,
-    content='messages',
-    content_rowid='id',
-    tokenize='porter unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-` + messagesADTriggerDDL + `
-CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-    INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
 `
 
 const recallEntriesFTS = `
@@ -3952,10 +3929,7 @@ func (db *DB) DropFTS() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
-		"DROP TRIGGER IF EXISTS messages_ai",
-		"DROP TRIGGER IF EXISTS messages_ad",
-		"DROP TRIGGER IF EXISTS messages_au",
-		"DROP TABLE IF EXISTS messages_fts",
+		"DROP TRIGGER IF EXISTS content_objects_ad",
 		"DROP TABLE IF EXISTS content_fts",
 	}
 	w := db.getWriter()
@@ -3977,12 +3951,6 @@ func (db *DB) RebuildFTS() error {
 	}
 	if err := rebuildContentFTSLocked(w); err != nil {
 		return err
-	}
-	_, err := w.Exec(
-		"INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
-	)
-	if err != nil {
-		return fmt.Errorf("rebuild fts index: %w", err)
 	}
 	return nil
 }
@@ -4050,7 +4018,7 @@ func (db *DB) HasFTS() bool {
 	// in sqlite_master but fail to load if the fts5 module is missing
 	// in the current runtime.
 	_, err := db.getReader().Exec(
-		"SELECT 1 FROM messages_fts LIMIT 1",
+		"SELECT 1 FROM content_fts LIMIT 1",
 	)
 	return err == nil
 }
@@ -4113,15 +4081,6 @@ func (db *DB) init() error {
 		}
 	}
 
-	// Check if FTS table exists before trying to create it
-	var ftsCount int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
-			" WHERE type='table' AND name='messages_fts'",
-	).Scan(&ftsCount); err != nil {
-		return fmt.Errorf("checking fts table: %w", err)
-	}
-	hadFTS := ftsCount > 0
 	var contentFTSCount int
 	if err := w.QueryRow(
 		"SELECT count(*) FROM sqlite_master" +
@@ -4141,15 +4100,6 @@ func (db *DB) init() error {
 			return fmt.Errorf("initializing FTS: %w", err)
 		}
 		ftsAvailable = false
-	} else if !hadFTS {
-		// Schema init succeeded and we didn't have FTS
-		// before. Populate the index for existing messages.
-		if _, err := w.Exec(
-			"INSERT INTO messages_fts(messages_fts)" +
-				" VALUES('rebuild')",
-		); err != nil {
-			return fmt.Errorf("backfilling FTS: %w", err)
-		}
 	}
 	if ftsAvailable && !hadContentFTS {
 		if err := rebuildContentFTSLocked(w); err != nil {

@@ -361,7 +361,7 @@ func TestSearchContentFTSUnavailable(t *testing.T) {
 	// then fail with an internal (non-input) error rather than being
 	// misclassified as an invalid user query (HTTP 400).
 	_, err := d.getWriter().Exec("DROP TABLE IF EXISTS content_fts")
-	require.NoError(t, err, "drop messages_fts")
+	require.NoError(t, err, "drop content_fts")
 	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "x", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,

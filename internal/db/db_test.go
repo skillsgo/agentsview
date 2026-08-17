@@ -4089,13 +4089,10 @@ func TestFTSBackfill(t *testing.T) {
 	requireNoError(t, err, "Open 1")
 	// Use writer directly to ensure it happens
 	w := d1.getWriter()
-	_, err = w.Exec("DROP TABLE IF EXISTS messages_fts")
+	_, err = w.Exec("DROP TRIGGER IF EXISTS content_objects_ad")
+	require.NoError(t, err, "dropping content cleanup trigger")
+	_, err = w.Exec("DROP TABLE IF EXISTS content_fts")
 	require.NoError(t, err, "dropping fts")
-	// Also drop triggers, otherwise inserts will fail
-	for _, tr := range []string{"messages_ai", "messages_ad", "messages_au"} {
-		_, err := w.Exec("DROP TRIGGER IF EXISTS " + tr)
-		require.NoError(t, err, "dropping trigger %s", tr)
-	}
 
 	// 2. Insert messages while FTS is missing
 	insertSession(t, d1, "s1", "proj")

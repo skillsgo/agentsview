@@ -652,7 +652,7 @@ func literalPrefix(pattern string) string {
 }
 
 // errFTSUnavailable is returned by the "fts" and "hybrid" content-search
-// modes when messages_fts is missing or unusable (e.g. the fts5 module
+// modes when content_fts is missing or unusable (e.g. the fts5 module
 // failed to load), so both modes report the same capability gate.
 var errFTSUnavailable = errors.New("search: full-text search is unavailable")
 
@@ -661,7 +661,7 @@ var errFTSUnavailable = errors.New("search: full-text search is unavailable")
 func (db *DB) searchContentFTS(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	// Guard FTS availability up front: a missing messages_fts table would
+	// Guard FTS availability up front: a missing content_fts table would
 	// otherwise raise a generic SQLITE_ERROR that classifyFTSError would misread
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.

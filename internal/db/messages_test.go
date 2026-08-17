@@ -103,7 +103,6 @@ func buildLargeSessionFixtureTemplate(
 		largeSessionMessages(largeSessionFixtureID, largeSessionFixtureToken)...)
 	if withFKPoison {
 		seedCrossSessionFKGrowth(t, d, largeSessionNeighborPrefix)
-		poisonMessagesDeleteTrigger(t, d)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), largeSessionPerfCeiling)
 	defer cancel()
@@ -159,55 +158,12 @@ func assertNoFTSLeak(t *testing.T, d *DB, token string) {
 	t.Helper()
 	var leaked int
 	err := d.getReader().QueryRow(
-		`SELECT count(*) FROM messages_fts
-		 WHERE messages_fts MATCH ?`,
+		`SELECT count(*) FROM content_fts
+		 WHERE content_fts MATCH ?`,
 		token,
 	).Scan(&leaked)
 	require.NoError(t, err, "fts leak check")
 	assert.Zero(t, leaked, "FTS still contains rows matching %q", token)
-}
-
-func poisonMessagesDeleteTrigger(t *testing.T, d *DB) {
-	t.Helper()
-
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		if _, err := tx.Exec("DROP TRIGGER IF EXISTS messages_ad"); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`
-			CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-				SELECT RAISE(FAIL, 'poison messages_ad fired');
-			END`)
-		return err
-	}), "poison messages_ad trigger")
-}
-
-func requireMessagesDeleteTriggerRestored(t *testing.T, d *DB) {
-	t.Helper()
-
-	var triggerSQL string
-	err := d.getReader().QueryRow(
-		`SELECT sql FROM sqlite_master
-		 WHERE type = 'trigger' AND name = 'messages_ad'`,
-	).Scan(&triggerSQL)
-	require.NoError(t, err, "read messages_ad trigger")
-	assert.NotContains(t, triggerSQL, "poison messages_ad fired",
-		"messages_ad trigger was not restored")
-	assert.Contains(t, triggerSQL, "INSERT INTO messages_fts",
-		"messages_ad trigger no longer matches the canonical FTS delete path")
-}
-
-func requireMessagesDeleteTriggerPoisoned(t *testing.T, d *DB) {
-	t.Helper()
-
-	var triggerSQL string
-	err := d.getReader().QueryRow(
-		`SELECT sql FROM sqlite_master
-		 WHERE type = 'trigger' AND name = 'messages_ad'`,
-	).Scan(&triggerSQL)
-	require.NoError(t, err, "read messages_ad trigger")
-	assert.Contains(t, triggerSQL, "poison messages_ad fired",
-		"fresh batch write should not touch the delete trigger")
 }
 
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
@@ -502,11 +458,8 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	require.NoError(t, err, "GetAllMessages after replace")
 	require.Len(t, got, len(repl), "after replace")
 
-	// Verify the FTS index was actually scrubbed: count rows in
-	// messages_fts that join back to the (now-deleted) original
-	// session rows. Should be zero. If the messages_ad trigger
-	// restoration failed silently or the bulk-delete INSERT...SELECT
-	// got skipped, stale tokens would still resolve here.
+	// The last reference to the original body must reclaim both the compressed
+	// object and its FTS projection.
 	assertNoFTSLeak(t, d, largeSessionFixtureToken)
 }
 
@@ -548,7 +501,6 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 	require.NoError(t, err, "GetAllMessages after batch replace")
 	require.Len(t, got, len(repl), "after batch replace")
 	assertNoFTSLeak(t, d, largeSessionFixtureToken)
-	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborToolCalls int
 	err = d.getReader().QueryRow(
@@ -558,34 +510,6 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 	require.NoError(t, err, "neighbor tool_calls count")
 	assert.Equal(t, crossSessionToolCallTotal, neighborToolCalls,
 		"neighbor tool_calls count")
-}
-
-func TestWriteSessionBatchFreshReplaceMessagesSkipsDeletePath(t *testing.T) {
-	t.Parallel()
-	d := testDB(t)
-	requireFTS(t, d)
-	poisonMessagesDeleteTrigger(t, d)
-
-	const sessionID = "batch-fresh"
-	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
-		Session: Session{
-			ID:               sessionID,
-			Project:          "proj",
-			Machine:          defaultMachine,
-			Agent:            defaultAgent,
-			MessageCount:     1,
-			UserMessageCount: 1,
-		},
-		Messages: []Message{
-			userMsg(sessionID, 0, "fresh"),
-		},
-		DataVersion:     CurrentDataVersion(),
-		ReplaceMessages: true,
-	}})
-	require.NoError(t, err, "WriteSessionBatch")
-	assert.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
-	assert.Equal(t, 1, result.WrittenMessages, "WrittenMessages")
-	requireMessagesDeleteTriggerPoisoned(t, d)
 }
 
 func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T) {

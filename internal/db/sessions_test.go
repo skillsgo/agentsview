@@ -27,7 +27,6 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 
 	requireSessionGone(t, d, largeSessionFixtureID)
 	assertNoFTSLeak(t, d, largeSessionFixtureToken)
-	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborPins int
 	err := d.getReader().QueryRow(

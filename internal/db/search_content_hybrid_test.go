@@ -42,15 +42,17 @@ func TestSearchContentHybridCursorRejected(t *testing.T) {
 
 // TestSearchContentHybridFTSUnavailable pins the FTS-missing capability gate:
 // hybrid additionally requires db.HasFTS() and mirrors mode "fts"'s error
-// when the messages_fts table is gone.
+// when the content_fts table is gone.
 func TestSearchContentHybridFTSUnavailable(t *testing.T) {
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(&fakeVectorSearcher{})
-	_, err := d.getWriter().Exec("DROP TABLE IF EXISTS messages_fts")
-	require.NoError(t, err, "drop messages_fts")
+	_, err := d.getWriter().Exec("DROP TRIGGER IF EXISTS content_objects_ad")
+	require.NoError(t, err, "drop content FTS cleanup trigger")
+	_, err = d.getWriter().Exec("DROP TABLE IF EXISTS content_fts")
+	require.NoError(t, err, "drop content_fts")
 
 	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "hello", Mode: "hybrid",
