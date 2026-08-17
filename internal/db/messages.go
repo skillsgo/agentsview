@@ -51,9 +51,9 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 38 // 26 params per row
-	toolCallInsertRowsPerStmt        = 83 // 12 params per row (999/12 = 83)
-	toolResultEventInsertRowsPerStmt = 80 // 12 params per row
+	messageInsertRowsPerStmt         = 35 // 28 params per row
+	toolCallInsertRowsPerStmt        = 71 // 14 params per row
+	toolResultEventInsertRowsPerStmt = 76 // 13 params per row
 )
 
 // ToolCall represents a single tool invocation stored in
@@ -72,6 +72,8 @@ type ToolCall struct {
 	ResultContent       string            `json:"result_content,omitempty"`
 	SubagentSessionID   string            `json:"subagent_session_id,omitempty"`
 	ResultEvents        []ToolResultEvent `json:"result_events,omitempty"`
+	inputObjectID       *int64
+	resultObjectID      *int64
 }
 
 // ToolResult holds a tool_result content block for pairing.
@@ -92,6 +94,7 @@ type ToolResultEvent struct {
 	ContentLength     int    `json:"content_length"`
 	Timestamp         string `json:"timestamp,omitempty"`
 	EventIndex        int    `json:"event_index"`
+	contentObjectID   *int64
 }
 
 // Message represents a row in the messages table.
@@ -126,6 +129,8 @@ type Message struct {
 	SourceParentUUID  string          `json:"source_parent_uuid,omitempty"`
 	IsSidechain       bool            `json:"is_sidechain,omitempty"`
 	IsCompactBoundary bool            `json:"is_compact_boundary,omitempty"`
+	contentObjectID   *int64
+	thinkingObjectID  *int64
 }
 
 type ModelCount struct {
@@ -731,6 +736,9 @@ func parseEndedAt(s string) (time.Time, error) {
 func insertMessagesTx(
 	tx *sql.Tx, msgs []Message,
 ) ([]int64, error) {
+	if err := prepareAgentContentRefsTx(tx, msgs); err != nil {
+		return nil, err
+	}
 	ids := make([]int64, len(msgs))
 	nextID, err := nextMessageIDTx(tx)
 	if err != nil {
@@ -740,17 +748,18 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*26)
+		args := make([]any, 0, len(batch)*28)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
 			args = append(args, id)
 			args = append(args, messageInsertArgs(m)...)
+			args = append(args, m.contentObjectID, m.thinkingObjectID)
 		}
 		query := fmt.Sprintf(
-			"INSERT INTO messages (id, %s) VALUES %s",
+			"INSERT INTO messages (id, %s, content_object_id, thinking_object_id) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 26),
+			multiRowPlaceholders(len(batch), 28),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -796,7 +805,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx *sql.Tx, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*12)
+	args := make([]any, 0, len(calls)*14)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -809,6 +818,8 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
 			tc.CallIndex,
+			tc.inputObjectID,
+			tc.resultObjectID,
 		)
 	}
 	query := `
@@ -816,8 +827,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 12)
+			 file_path, call_index, input_object_id, result_object_id)
+		VALUES ` + multiRowPlaceholders(len(calls), 14)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -830,7 +841,7 @@ func insertToolCallsChunkTx(
 func insertToolResultEventsChunkTx(
 	tx *sql.Tx, rows []toolResultEventRow,
 ) error {
-	args := make([]any, 0, len(rows)*12)
+	args := make([]any, 0, len(rows)*13)
 	for _, r := range rows {
 		args = append(args,
 			r.SessionID, r.MessageOrdinal, r.CallIndex,
@@ -842,6 +853,7 @@ func insertToolResultEventsChunkTx(
 			r.Event.ContentLength,
 			nilIfEmpty(r.Event.Timestamp),
 			r.Event.EventIndex,
+			r.Event.contentObjectID,
 		)
 	}
 	query := `
@@ -849,8 +861,8 @@ func insertToolResultEventsChunkTx(
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
 			 source, status, content, content_length,
-			 timestamp, event_index)
-		VALUES ` + multiRowPlaceholders(len(rows), 12)
+			 timestamp, event_index, content_object_id)
+		VALUES ` + multiRowPlaceholders(len(rows), 13)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_result_events batch (%d rows): %w",
@@ -2648,6 +2660,8 @@ func resolveToolCalls(
 				SubagentSessionID:   tc.SubagentSessionID,
 				FilePath:            tc.FilePath,
 				CallIndex:           callIdx,
+				inputObjectID:       tc.inputObjectID,
+				resultObjectID:      tc.resultObjectID,
 			})
 		}
 	}

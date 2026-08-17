@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS provider_freshness (
 CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
     ON provider_freshness(updated_at);
 
+-- content_objects is the physical content layer for Agent Store. Product
+-- tables retain queryable Agent facts and refer to exact compressed bodies.
+-- Search text is a rebuildable FTS projection, never a second source of truth.
+CREATE TABLE IF NOT EXISTS content_objects (
+    id          INTEGER PRIMARY KEY,
+    digest      BLOB NOT NULL UNIQUE,
+    raw_size    INTEGER NOT NULL CHECK (raw_size > 0),
+    codec       INTEGER NOT NULL,
+    payload     BLOB NOT NULL
+);
+
 -- Messages table with ordinal for efficient range queries
 CREATE TABLE IF NOT EXISTS messages (
     id             INTEGER PRIMARY KEY,
@@ -116,6 +127,8 @@ CREATE TABLE IF NOT EXISTS messages (
     role           TEXT NOT NULL,
     content        TEXT NOT NULL,
     thinking_text  TEXT NOT NULL DEFAULT '',
+    content_object_id INTEGER REFERENCES content_objects(id),
+    thinking_object_id INTEGER REFERENCES content_objects(id),
     timestamp      TEXT,
     has_thinking   INTEGER NOT NULL DEFAULT 0,
     has_tool_use   INTEGER NOT NULL DEFAULT 0,
@@ -315,9 +328,11 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     category   TEXT NOT NULL,
     tool_use_id TEXT,
     input_json  TEXT,
+    input_object_id INTEGER REFERENCES content_objects(id),
     skill_name  TEXT,
     result_content_length INTEGER,
     result_content        TEXT,
+    result_object_id INTEGER REFERENCES content_objects(id),
     subagent_session_id TEXT,
     file_path  TEXT,
     call_index INTEGER
@@ -356,6 +371,7 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
     source                   TEXT NOT NULL,
     status                   TEXT NOT NULL,
     content                  TEXT NOT NULL,
+    content_object_id        INTEGER REFERENCES content_objects(id),
     content_length           INTEGER NOT NULL DEFAULT 0,
     timestamp                TEXT,
     event_index              INTEGER NOT NULL DEFAULT 0

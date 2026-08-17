@@ -2220,6 +2220,26 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"sessions", "sync_marker",
 			"ALTER TABLE sessions ADD COLUMN sync_marker TEXT",
 		},
+		{
+			"messages", "content_object_id",
+			"ALTER TABLE messages ADD COLUMN content_object_id INTEGER REFERENCES content_objects(id)",
+		},
+		{
+			"messages", "thinking_object_id",
+			"ALTER TABLE messages ADD COLUMN thinking_object_id INTEGER REFERENCES content_objects(id)",
+		},
+		{
+			"tool_calls", "input_object_id",
+			"ALTER TABLE tool_calls ADD COLUMN input_object_id INTEGER REFERENCES content_objects(id)",
+		},
+		{
+			"tool_calls", "result_object_id",
+			"ALTER TABLE tool_calls ADD COLUMN result_object_id INTEGER REFERENCES content_objects(id)",
+		},
+		{
+			"tool_result_events", "content_object_id",
+			"ALTER TABLE tool_result_events ADD COLUMN content_object_id INTEGER REFERENCES content_objects(id)",
+		},
 	}
 }
 

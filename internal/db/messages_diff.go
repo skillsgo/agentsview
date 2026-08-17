@@ -71,11 +71,17 @@ func messageRowEqual(a, b Message) bool {
 		return false
 	}
 	for i := range aEvents {
-		if aEvents[i] != bEvents[i] {
+		if !toolResultEventRowEqual(aEvents[i], bEvents[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func toolResultEventRowEqual(a, b toolResultEventRow) bool {
+	a.Event.contentObjectID = nil
+	b.Event.contentObjectID = nil
+	return a == b
 }
 
 // toolCallRowEqual compares the persisted tool_calls columns except
@@ -317,13 +323,23 @@ func applySessionMessageDiffTx(
 	tx *sql.Tx, sessionID string, plan messageDiffPlan,
 ) error {
 	if len(plan.updates) > 0 {
+		prepared := make([]Message, len(plan.updates))
+		for i, update := range plan.updates {
+			prepared[i] = update.msg
+		}
+		if err := prepareAgentContentRefsTx(tx, prepared); err != nil {
+			return err
+		}
 		updateSQL := "UPDATE messages SET " +
-			messageUpdateSetClause + " WHERE id = ?"
+			messageUpdateSetClause +
+			", content_object_id = ?, thinking_object_id = ? WHERE id = ?"
 		ids := make([]int64, 0, len(plan.updates))
 		ordinals := make([]int, 0, len(plan.updates))
 		msgs := make([]Message, 0, len(plan.updates))
-		for _, u := range plan.updates {
-			args := append(messageInsertArgs(u.msg), u.id)
+		for i, u := range plan.updates {
+			message := prepared[i]
+			args := append(messageInsertArgs(message),
+				message.contentObjectID, message.thinkingObjectID, u.id)
 			if _, err := tx.Exec(updateSQL, args...); err != nil {
 				return fmt.Errorf(
 					"updating message ord=%d: %w",
@@ -332,7 +348,7 @@ func applySessionMessageDiffTx(
 			}
 			ids = append(ids, u.id)
 			ordinals = append(ordinals, u.msg.Ordinal)
-			msgs = append(msgs, u.msg)
+			msgs = append(msgs, message)
 		}
 		if err := deleteToolRowsForMessagesTx(
 			tx, sessionID, ids, ordinals,

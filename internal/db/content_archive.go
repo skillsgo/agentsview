@@ -64,11 +64,6 @@ CREATE TABLE content_refs (
 ) WITHOUT ROWID;
 `
 
-const (
-	contentCodecRaw  = 0
-	contentCodecZstd = 1
-)
-
 var entityKindCode = map[string]int{
 	"message": 1, "tool_call": 2, "tool_result_event": 3,
 }
@@ -352,14 +347,6 @@ func streamContentReferences(ctx context.Context, source *sql.Tx, query string, 
 		return fmt.Errorf("streaming legacy content: %w", err)
 	}
 	return nil
-}
-
-func encodeContent(encoder *zstd.Encoder, raw []byte) (int, []byte) {
-	compressed := encoder.EncodeAll(raw, nil)
-	if len(compressed) >= len(raw) {
-		return contentCodecRaw, raw
-	}
-	return contentCodecZstd, compressed
 }
 
 func storeContentReference(ctx context.Context, s *contentArchiveStatements, packer *contentPackWriter,
