@@ -945,23 +945,24 @@ pulled in from PostgreSQL sync or copied from other archives.
 
 ## Database
 
-The SQLite database uses WAL mode for concurrent reads and includes FTS5
-full-text search indexes on message content.
+The SQLite database uses WAL mode for concurrent reads and includes a complete
+FTS5 projection over agent content.
 
 **Schema tables:**
 
 | Table                | Purpose                                                                      |
 | -------------------- | ---------------------------------------------------------------------------- |
 | `sessions`           | Session metadata (project, agent, timestamps, file info, user message count) |
-| `messages`           | Message content with role, ordinal, timestamps                               |
-| `tool_calls`         | Tool invocations with normalized category taxonomy                           |
-| `tool_result_events` | Chronological status events for tool calls (e.g. Codex subagent updates)     |
+| `messages`           | Message facts and integer references to exact content objects                |
+| `tool_calls`         | Tool invocation facts and input/result object references                     |
+| `tool_result_events` | Chronological tool status facts and content object references                |
+| `content_objects`    | Deduplicated SHA-256 bodies stored as raw bytes or highest-level Zstd        |
 | `insights`           | AI-generated session analysis and summaries                                  |
 | `starred_sessions`   | Server-side star persistence (replaces localStorage)                         |
 | `pinned_messages`    | Pinned message references with session linkage                               |
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
-| `messages_fts`       | FTS5 virtual table for full-text search                                      |
+| `content_fts`        | Rebuildable FTS5 plaintext projection over each unique content object        |
 
 The database is automatically migrated on startup when the schema changes. When
 the stored data version is stale, AgentsView preserves the existing database and
