@@ -173,7 +173,7 @@ func (db *DB) queryCallRows(
 		  tc.category,
 		  tc.skill_name,
 		  tc.subagent_session_id,
-		  tc.input_json,
+		  tc.input_object_id,
 		  (
 		    SELECT tre.timestamp
 		    FROM tool_result_events tre
@@ -219,17 +219,18 @@ func (db *DB) queryCallRows(
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var out []CallRow
+	var inputObjectIDs []int64
+	var inputTargets []int
 	for rows.Next() {
 		var r CallRow
-		var toolUseID, inputJSON sql.NullString
+		var toolUseID sql.NullString
+		var inputObjectID sql.NullInt64
 		var skill, sub, executionStarted, executionCompleted sql.NullString
 		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&r.MessageID, &toolUseID, &r.ToolName, &r.Category,
-			&skill, &sub, &inputJSON, &executionStarted, &executionCompleted,
+			&skill, &sub, &inputObjectID, &executionStarted, &executionCompleted,
 			&subDur,
 		); err != nil {
 			return nil, err
@@ -245,8 +246,9 @@ func (db *DB) queryCallRows(
 			s := sub.String
 			r.SubagentSessionID = &s
 		}
-		if inputJSON.Valid {
-			r.InputJSON = inputJSON.String
+		if inputObjectID.Valid {
+			inputObjectIDs = append(inputObjectIDs, inputObjectID.Int64)
+			inputTargets = append(inputTargets, len(out))
 		}
 		if subDur.Valid {
 			v := subDur.Int64
@@ -260,7 +262,21 @@ func (db *DB) queryCallRows(
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), inputObjectIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i, target := range inputTargets {
+		out[target].InputJSON = contents[inputObjectIDs[i]]
+	}
+	return out, nil
 }
 
 // AssembleTiming stitches scanned per-turn and per-call rows plus

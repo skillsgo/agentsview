@@ -261,10 +261,10 @@ func buildRecallEvidenceWindow(
 	toolRows, err := queryer.QueryContext(ctx, `
 		SELECT m.ordinal, tc.tool_name, tc.category,
 		       COALESCE(tc.tool_use_id, ''),
-		       COALESCE(tc.input_json, ''),
+		       tc.input_object_id,
 		       COALESCE(tc.skill_name, ''),
 		       COALESCE(tc.result_content_length, 0),
-		       COALESCE(tc.result_content, ''),
+		       tc.result_object_id,
 		       COALESCE(tc.subagent_session_id, '')
 		FROM tool_calls tc
 		JOIN messages m ON m.id = tc.message_id
@@ -284,18 +284,27 @@ func buildRecallEvidenceWindow(
 		)
 	}
 	allowedToolUseIDs := make(map[string]struct{})
+	type toolContentRef struct {
+		messageIndex int
+		callIndex    int
+		inputID      sql.NullInt64
+		resultID     sql.NullInt64
+	}
+	var contentRefs []toolContentRef
+	var contentIDs []int64
 	for toolRows.Next() {
 		var ordinal int
 		var toolCall RecallEvidenceWindowToolCall
+		var inputID, resultID sql.NullInt64
 		if err := toolRows.Scan(
 			&ordinal,
 			&toolCall.ToolName,
 			&toolCall.Category,
 			&toolCall.ToolUseID,
-			&toolCall.InputJSON,
+			&inputID,
 			&toolCall.SkillName,
 			&toolCall.ResultContentLength,
-			&toolCall.ResultContent,
+			&resultID,
 			&toolCall.SubagentSessionID,
 		); err != nil {
 			toolRows.Close()
@@ -316,6 +325,17 @@ func buildRecallEvidenceWindow(
 			window.Messages[messageIndex].ToolCalls,
 			toolCall,
 		)
+		callIndex := len(window.Messages[messageIndex].ToolCalls) - 1
+		contentRefs = append(contentRefs, toolContentRef{
+			messageIndex: messageIndex, callIndex: callIndex,
+			inputID: inputID, resultID: resultID,
+		})
+		if inputID.Valid {
+			contentIDs = append(contentIDs, inputID.Int64)
+		}
+		if resultID.Valid {
+			contentIDs = append(contentIDs, resultID.Int64)
+		}
 		if toolCall.ToolUseID != "" {
 			allowedToolUseIDs[toolCall.ToolUseID] = struct{}{}
 		}
@@ -331,6 +351,19 @@ func buildRecallEvidenceWindow(
 			"reading recall evidence tool calls: %w",
 			err,
 		)
+	}
+	contents, err := loadAgentContents(ctx, queryer, contentIDs)
+	if err != nil {
+		return RecallEvidenceWindow{}, err
+	}
+	for _, ref := range contentRefs {
+		call := &window.Messages[ref.messageIndex].ToolCalls[ref.callIndex]
+		if ref.inputID.Valid {
+			call.InputJSON = contents[ref.inputID.Int64]
+		}
+		if ref.resultID.Valid {
+			call.ResultContent = contents[ref.resultID.Int64]
+		}
 	}
 	window.AllowedToolUseIDs = make(
 		[]string,
