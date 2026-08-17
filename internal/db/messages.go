@@ -1201,7 +1201,6 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 type savedPin struct {
 	sourceUUID          string
 	role                string
-	content             string
 	contentObjectID     sql.NullInt64
 	ordinal             int
 	sourceUUIDCount     int
@@ -1631,8 +1630,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 	// the old message before it is deleted.
 	pinRows, err := tx.Query(`
 		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
-			COALESCE(m.role, ''), COALESCE(m.content, ''),
-			m.content_object_id,
+			COALESCE(m.role, ''), m.content_object_id,
 			CASE WHEN m.id IS NULL THEN 0 ELSE 1 END,
 			(
 				SELECT COUNT(*)
@@ -1647,10 +1645,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				WHERE same_identity.session_id = m.session_id
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
-					AND (same_identity.content_object_id = m.content_object_id
-						OR (same_identity.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND same_identity.content = m.content))
+					AND same_identity.content_object_id IS m.content_object_id
 					AND m.source_uuid != ''
 			),
 			(
@@ -1659,10 +1654,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				WHERE identity_rank.session_id = m.session_id
 					AND identity_rank.source_uuid = m.source_uuid
 					AND identity_rank.role = m.role
-					AND (identity_rank.content_object_id = m.content_object_id
-						OR (identity_rank.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND identity_rank.content = m.content))
+					AND identity_rank.content_object_id IS m.content_object_id
 					AND identity_rank.ordinal <= m.ordinal
 					AND m.source_uuid != ''
 			),
@@ -1671,10 +1663,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				FROM messages legacy_identity
 				WHERE legacy_identity.session_id = m.session_id
 					AND legacy_identity.role = m.role
-					AND (legacy_identity.content_object_id = m.content_object_id
-						OR (legacy_identity.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND legacy_identity.content = m.content))
+					AND legacy_identity.content_object_id IS m.content_object_id
 					AND legacy_identity.is_system = 0
 			),
 			(
@@ -1682,10 +1671,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 				FROM messages legacy_rank
 				WHERE legacy_rank.session_id = m.session_id
 					AND legacy_rank.role = m.role
-					AND (legacy_rank.content_object_id = m.content_object_id
-						OR (legacy_rank.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND legacy_rank.content = m.content))
+					AND legacy_rank.content_object_id IS m.content_object_id
 					AND legacy_rank.is_system = 0
 					AND legacy_rank.ordinal <= m.ordinal
 			),
@@ -1703,8 +1689,7 @@ func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
 	for pinRows.Next() {
 		var sp savedPin
 		if err := pinRows.Scan(
-			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.content,
-			&sp.contentObjectID,
+			&sp.ordinal, &sp.sourceUUID, &sp.role, &sp.contentObjectID,
 			&sp.messageFound, &sp.sourceUUIDCount,
 			&sp.sourceIdentityCount, &sp.sourceIdentityRank,
 			&sp.legacyIdentityCount, &sp.legacyIdentityRank,
@@ -1800,18 +1785,14 @@ func restorePinBySourceUUIDTx(
 		WHERE m.session_id = ?
 			AND m.source_uuid = ?
 			AND m.role = ?
-			AND (m.content_object_id = ? OR
-				(? IS NULL AND m.content_object_id IS NULL AND m.content = ?))
+			AND m.content_object_id IS ?
 			AND (
 				SELECT COUNT(*)
 				FROM messages same_identity
 				WHERE same_identity.session_id = m.session_id
 					AND same_identity.source_uuid = m.source_uuid
 					AND same_identity.role = m.role
-					AND (same_identity.content_object_id = m.content_object_id
-						OR (same_identity.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND same_identity.content = m.content))
+					AND same_identity.content_object_id IS m.content_object_id
 			) = ?
 			AND (
 				SELECT COUNT(*)
@@ -1819,14 +1800,11 @@ func restorePinBySourceUUIDTx(
 				WHERE identity_rank.session_id = m.session_id
 					AND identity_rank.source_uuid = m.source_uuid
 					AND identity_rank.role = m.role
-					AND (identity_rank.content_object_id = m.content_object_id
-						OR (identity_rank.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND identity_rank.content = m.content))
+					AND identity_rank.content_object_id IS m.content_object_id
 					AND identity_rank.ordinal <= m.ordinal
 			) = ?`,
 		sessionID, sp.note, sp.createdAt, sessionID,
-		sp.sourceUUID, sp.role, sp.contentObjectID, sp.contentObjectID, sp.content,
+		sp.sourceUUID, sp.role, sp.contentObjectID,
 		sp.sourceIdentityCount, sp.sourceIdentityRank,
 	); err != nil {
 		return fmt.Errorf(
@@ -1856,17 +1834,13 @@ func restoreLegacyPinByRankTx(
 		WHERE m.session_id = ?
 			AND m.is_system = 0
 			AND m.role = ?
-			AND (m.content_object_id = ? OR
-				(? IS NULL AND m.content_object_id IS NULL AND m.content = ?))
+			AND m.content_object_id IS ?
 			AND (
 				SELECT COUNT(*)
 				FROM messages legacy_identity
 				WHERE legacy_identity.session_id = m.session_id
 					AND legacy_identity.role = m.role
-					AND (legacy_identity.content_object_id = m.content_object_id
-						OR (legacy_identity.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND legacy_identity.content = m.content))
+					AND legacy_identity.content_object_id IS m.content_object_id
 					AND legacy_identity.is_system = 0
 			) = ?
 			AND (
@@ -1874,15 +1848,12 @@ func restoreLegacyPinByRankTx(
 				FROM messages legacy_rank
 				WHERE legacy_rank.session_id = m.session_id
 					AND legacy_rank.role = m.role
-					AND (legacy_rank.content_object_id = m.content_object_id
-						OR (legacy_rank.content_object_id IS NULL
-							AND m.content_object_id IS NULL
-							AND legacy_rank.content = m.content))
+					AND legacy_rank.content_object_id IS m.content_object_id
 					AND legacy_rank.is_system = 0
 					AND legacy_rank.ordinal <= m.ordinal
 			) = ?`,
 		sessionID, sp.note, sp.createdAt, sessionID,
-		sp.role, sp.contentObjectID, sp.contentObjectID, sp.content,
+		sp.role, sp.contentObjectID,
 		sp.legacyIdentityCount, sp.legacyIdentityRank,
 	)
 	if err != nil {
@@ -2456,7 +2427,7 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(
 func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, m.is_system, m.has_thinking, m.has_tool_use,
-			m.thinking_text, co.digest
+			co.digest
 		 FROM messages m
 		 LEFT JOIN content_objects co ON co.id = m.thinking_object_id
 		 WHERE m.session_id = ?
@@ -2473,7 +2444,7 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 		var r flagsFingerprintRow
 		if err := rows.Scan(
 			&r.ordinal, &r.isSystem, &r.hasThinking, &r.hasToolUse,
-			&r.thinkingText, &r.thinkingDigest,
+			&r.thinkingDigest,
 		); err != nil {
 			return "", err
 		}
@@ -2502,7 +2473,7 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, tc.tool_name, tc.category, tc.tool_use_id,
-			tc.input_json, ico.digest, tc.skill_name, tc.subagent_session_id,
+			ico.digest, tc.skill_name, tc.subagent_session_id,
 			tc.result_content_length, COALESCE(tc.file_path, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
@@ -2521,11 +2492,11 @@ func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 		var ordinal int
 		var resultLen sql.NullInt64
 		var toolName, category, filePath string
-		var toolUseID, inputJSON, skillName, subagentSessionID sql.NullString
+		var toolUseID, skillName, subagentSessionID sql.NullString
 		var inputDigest []byte
 		if err := rows.Scan(
 			&ordinal, &toolName, &category, &toolUseID,
-			&inputJSON, &inputDigest, &skillName, &subagentSessionID, &resultLen,
+			&inputDigest, &skillName, &subagentSessionID, &resultLen,
 			&filePath,
 		); err != nil {
 			return "", err
@@ -2536,9 +2507,8 @@ func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 		skill := SanitizeUTF8(skillName.String)
 		sub := SanitizeUTF8(subagentSessionID.String)
 		fp := SanitizeUTF8(filePath)
-		sum := sha256.Sum256([]byte(SanitizeUTF8(inputJSON.String)))
-		if len(inputDigest) == sha256.Size &&
-			SanitizeUTF8(inputJSON.String) == inputJSON.String {
+		sum := sha256.Sum256(nil)
+		if len(inputDigest) == sha256.Size {
 			copy(sum[:], inputDigest)
 		}
 		fmt.Fprintf(&b,
@@ -2738,11 +2708,11 @@ func (db *DB) ToolCallContentFingerprint(sessionID string) (int64, error) {
 func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, tc.tool_name, tc.category,
-			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
+			COALESCE(tc.tool_use_id, ''), tc.input_object_id,
 			COALESCE(tc.skill_name, ''),
 			COALESCE(tc.subagent_session_id, ''),
 			COALESCE(tc.result_content_length, 0),
-			COALESCE(tc.result_content, ''),
+			tc.result_object_id,
 			COALESCE(tc.file_path, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
@@ -2753,24 +2723,55 @@ func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	var indexer toolCallIndexer
+	type storedFingerprintRow struct {
+		row            toolCallFingerprintRow
+		inputObjectID  sql.NullInt64
+		resultObjectID sql.NullInt64
+	}
+	var storedRows []storedFingerprintRow
+	var objectIDs []int64
 	for rows.Next() {
-		var r toolCallFingerprintRow
+		var stored storedFingerprintRow
 		if err := rows.Scan(
-			&r.messageOrdinal, &r.toolName, &r.category,
-			&r.toolUseID, &r.inputJSON, &r.skillName,
-			&r.subagentSessionID, &r.resultContentLength,
-			&r.resultContent, &r.filePath,
+			&stored.row.messageOrdinal, &stored.row.toolName, &stored.row.category,
+			&stored.row.toolUseID, &stored.inputObjectID, &stored.row.skillName,
+			&stored.row.subagentSessionID, &stored.row.resultContentLength,
+			&stored.resultObjectID, &stored.row.filePath,
 		); err != nil {
 			return "", err
 		}
-		r.callIndex = indexer.next(sessionID, r.messageOrdinal)
-		r.appendTo(&b)
+		storedRows = append(storedRows, stored)
+		if stored.inputObjectID.Valid {
+			objectIDs = append(objectIDs, stored.inputObjectID.Int64)
+		}
+		if stored.resultObjectID.Valid {
+			objectIDs = append(objectIDs, stored.resultObjectID.Int64)
+		}
 	}
-	return b.String(), rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", err
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	contents, err := loadAgentContents(context.Background(), db.getReader(), objectIDs)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	var indexer toolCallIndexer
+	for _, stored := range storedRows {
+		if stored.inputObjectID.Valid {
+			stored.row.inputJSON = contents[stored.inputObjectID.Int64]
+		}
+		if stored.resultObjectID.Valid {
+			stored.row.resultContent = contents[stored.resultObjectID.Int64]
+		}
+		stored.row.callIndex = indexer.next(sessionID, stored.row.messageOrdinal)
+		stored.row.appendTo(&b)
+	}
+	return b.String(), nil
 }
 
 // ToolResultEventFingerprintWithTimestampNormalizer returns an exact ordered

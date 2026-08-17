@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -259,11 +260,12 @@ func (db *DB) MessageFlagsFingerprints(
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(`
-			SELECT session_id, ordinal, is_system, has_thinking,
-				has_tool_use, thinking_text
-			 FROM messages
-			 WHERE session_id IN (`+ph+`)
-			 ORDER BY session_id, ordinal ASC`,
+			SELECT m.session_id, m.ordinal, m.is_system, m.has_thinking,
+				m.has_tool_use, co.digest
+			 FROM messages m
+			 LEFT JOIN content_objects co ON co.id = m.thinking_object_id
+			 WHERE m.session_id IN (`+ph+`)
+			 ORDER BY m.session_id, m.ordinal ASC`,
 			args...,
 		)
 		if err != nil {
@@ -276,7 +278,7 @@ func (db *DB) MessageFlagsFingerprints(
 			var r flagsFingerprintRow
 			if err := rows.Scan(
 				&sessionID, &r.ordinal, &r.isSystem, &r.hasThinking,
-				&r.hasToolUse, &r.thinkingText,
+				&r.hasToolUse, &r.thinkingDigest,
 			); err != nil {
 				return err
 			}
@@ -414,11 +416,11 @@ func (db *DB) ToolCallFingerprints(
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(`
 			SELECT tc.session_id, m.ordinal, tc.tool_name, tc.category,
-				COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
+				COALESCE(tc.tool_use_id, ''), tc.input_object_id,
 				COALESCE(tc.skill_name, ''),
 				COALESCE(tc.subagent_session_id, ''),
 				COALESCE(tc.result_content_length, 0),
-				COALESCE(tc.result_content, ''),
+				tc.result_object_id,
 				COALESCE(tc.file_path, '')
 			 FROM tool_calls tc
 			 JOIN messages m ON m.id = tc.message_id
@@ -429,25 +431,60 @@ func (db *DB) ToolCallFingerprints(
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		builders := fingerprintBuilders{}
-		var indexer toolCallIndexer
+		type storedFingerprintRow struct {
+			sessionID      string
+			row            toolCallFingerprintRow
+			inputObjectID  sql.NullInt64
+			resultObjectID sql.NullInt64
+		}
+		var storedRows []storedFingerprintRow
+		var objectIDs []int64
 		for rows.Next() {
-			var sessionID string
-			var r toolCallFingerprintRow
+			var stored storedFingerprintRow
 			if err := rows.Scan(
-				&sessionID, &r.messageOrdinal, &r.toolName, &r.category,
-				&r.toolUseID, &r.inputJSON, &r.skillName,
-				&r.subagentSessionID, &r.resultContentLength,
-				&r.resultContent, &r.filePath,
+				&stored.sessionID, &stored.row.messageOrdinal,
+				&stored.row.toolName, &stored.row.category,
+				&stored.row.toolUseID, &stored.inputObjectID,
+				&stored.row.skillName, &stored.row.subagentSessionID,
+				&stored.row.resultContentLength, &stored.resultObjectID,
+				&stored.row.filePath,
 			); err != nil {
 				return err
 			}
-			r.callIndex = indexer.next(sessionID, r.messageOrdinal)
-			r.appendTo(builders.get(sessionID))
+			storedRows = append(storedRows, stored)
+			if stored.inputObjectID.Valid {
+				objectIDs = append(objectIDs, stored.inputObjectID.Int64)
+			}
+			if stored.resultObjectID.Valid {
+				objectIDs = append(objectIDs, stored.resultObjectID.Int64)
+			}
 		}
 		if err := rows.Err(); err != nil {
+			_ = rows.Close()
 			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		contents, err := loadAgentContents(
+			context.Background(), db.getReader(), objectIDs,
+		)
+		if err != nil {
+			return err
+		}
+		builders := fingerprintBuilders{}
+		var indexer toolCallIndexer
+		for _, stored := range storedRows {
+			if stored.inputObjectID.Valid {
+				stored.row.inputJSON = contents[stored.inputObjectID.Int64]
+			}
+			if stored.resultObjectID.Valid {
+				stored.row.resultContent = contents[stored.resultObjectID.Int64]
+			}
+			stored.row.callIndex = indexer.next(
+				stored.sessionID, stored.row.messageOrdinal,
+			)
+			stored.row.appendTo(builders.get(stored.sessionID))
 		}
 		builders.mergeInto(out)
 		return nil
@@ -671,14 +708,12 @@ type flagsFingerprintRow struct {
 	isSystem       bool
 	hasThinking    bool
 	hasToolUse     bool
-	thinkingText   string
 	thinkingDigest []byte
 }
 
 func (r flagsFingerprintRow) appendTo(b *strings.Builder) {
-	sum := sha256.Sum256([]byte(SanitizeUTF8(r.thinkingText)))
-	if len(r.thinkingDigest) == sha256.Size &&
-		SanitizeUTF8(r.thinkingText) == r.thinkingText {
+	sum := sha256.Sum256(nil)
+	if len(r.thinkingDigest) == sha256.Size {
 		copy(sum[:], r.thinkingDigest)
 	}
 	fmt.Fprintf(b, "%d|%t|%t|%t|%x;",
