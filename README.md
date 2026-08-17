@@ -635,6 +635,22 @@ requires a token, and rejects non-loopback plain HTTP unless `--allow-insecure`
 is explicit. For remote use, prefer a TLS URL or put Quack behind an
 authenticated tunnel/proxy.
 
+To compare the primary inline SQLite layout with the experimental Agent-aware
+content layout, build a fresh side archive:
+
+```bash
+agentsview storage compare --archive /private/path/content-comparison.db
+```
+
+The source archive is opened read-only. The comparison archive keeps semantic
+references for message content, thinking, tool inputs, tool results, and result
+events while storing exact content identities as deduplicated 256 KiB Zstd
+chunks. It is written with mode `0600`, published atomically, and rejected when
+the destination already exists. By default the command reconstructs and hashes
+every unique object before reporting physical size, structural deduplication,
+compression payload, and per-role-field totals. This is an experimental
+measurement artifact, not a serving backend or system of record.
+
 Backend modes:
 
 - SQLite: primary local archive, file sync, FTS5 search, and writable UI.
