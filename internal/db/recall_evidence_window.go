@@ -198,7 +198,7 @@ func buildRecallEvidenceWindow(
 		MessageEndOrdinal:   messageEndOrdinal,
 	}
 	rows, err := queryer.QueryContext(ctx, `
-		SELECT ordinal, role, content, source_uuid
+		SELECT ordinal, role, content_object_id, source_uuid
 		FROM messages
 		WHERE session_id = ?
 		  AND ordinal BETWEEN ? AND ?
@@ -213,12 +213,15 @@ func buildRecallEvidenceWindow(
 			err,
 		)
 	}
+	var messageContentIDs []int64
+	var messageObjectIDs []sql.NullInt64
 	for rows.Next() {
 		var message RecallEvidenceWindowMessage
+		var contentID sql.NullInt64
 		if err := rows.Scan(
 			&message.Ordinal,
 			&message.Role,
-			&message.Content,
+			&contentID,
 			&message.SourceUUID,
 		); err != nil {
 			rows.Close()
@@ -228,6 +231,10 @@ func buildRecallEvidenceWindow(
 			)
 		}
 		window.Messages = append(window.Messages, message)
+		messageObjectIDs = append(messageObjectIDs, contentID)
+		if contentID.Valid {
+			messageContentIDs = append(messageContentIDs, contentID.Int64)
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return RecallEvidenceWindow{}, fmt.Errorf(
@@ -240,6 +247,15 @@ func buildRecallEvidenceWindow(
 			"reading recall evidence messages: %w",
 			err,
 		)
+	}
+	messageContents, err := loadAgentContents(ctx, queryer, messageContentIDs)
+	if err != nil {
+		return RecallEvidenceWindow{}, err
+	}
+	for i, contentID := range messageObjectIDs {
+		if contentID.Valid {
+			window.Messages[i].Content = messageContents[contentID.Int64]
+		}
 	}
 	for offset := 0; offset <= messageEndOrdinal-messageStartOrdinal; offset++ {
 		want := messageStartOrdinal + offset

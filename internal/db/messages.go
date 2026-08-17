@@ -33,7 +33,7 @@ const (
 	insertMessageCols = `session_id, ordinal, role, content, thinking_text,
 		content_object_id, thinking_object_id,
 		timestamp, has_thinking, has_tool_use, content_length,
-		is_system,
+		is_system, is_embeddable,
 		model, token_usage, context_tokens, output_tokens,
 		has_context_tokens, has_output_tokens,
 		claude_message_id, claude_request_id,
@@ -52,7 +52,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 35 // 28 params per row
+	messageInsertRowsPerStmt         = 34 // 29 params per row
 	toolCallInsertRowsPerStmt        = 71 // 14 params per row
 	toolResultEventInsertRowsPerStmt = 76 // 13 params per row
 )
@@ -821,7 +821,7 @@ func insertPreparedMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*28)
+		args := make([]any, 0, len(batch)*29)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -831,7 +831,7 @@ func insertPreparedMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 28),
+			multiRowPlaceholders(len(batch), 29),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal

@@ -2091,6 +2091,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"messages", "is_embeddable",
+			"ALTER TABLE messages ADD COLUMN is_embeddable INTEGER NOT NULL DEFAULT 0",
+		},
+		{
 			"sessions", "termination_status",
 			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
 		},

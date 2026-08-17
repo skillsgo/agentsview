@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS messages (
     has_tool_use   INTEGER NOT NULL DEFAULT 0,
     content_length INTEGER NOT NULL DEFAULT 0,
     is_system      INTEGER NOT NULL DEFAULT 0,
+    is_embeddable  INTEGER NOT NULL DEFAULT 0,
     model TEXT NOT NULL DEFAULT '',
     token_usage TEXT NOT NULL DEFAULT '',
     context_tokens INTEGER NOT NULL DEFAULT 0,

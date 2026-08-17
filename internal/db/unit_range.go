@@ -510,14 +510,10 @@ var _ UnitBoundsQuerier = (*DB)(nil)
 // session binds 2 variables (idx, session_id).
 const unitSessionChunk = maxSQLVars / 2
 
-// embeddableUserSQL is the SQL predicate matching an embeddable user row
-// under the messages alias: user role, is_system = 0, and the SQLite dialect
-// SystemPrefixSQL check, exactly as ScanEmbeddableUnits' scan predicate.
-// (The assistant-side member predicate in runExtentSelectSQL skips the
-// prefix check: SystemPrefixSQL constrains user rows only.)
+// embeddableUserSQL matches the classification persisted at ingest, avoiding
+// any dependency on compressed message bodies in range queries.
 func embeddableUserSQL(alias string) string {
-	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = 0 AND %[2]s",
-		alias, SystemPrefixSQL(alias+".content", alias+".role"))
+	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_embeddable = 1", alias)
 }
 
 // NearestUserBoundaries returns, per probe, the nearest embeddable user

@@ -22,6 +22,7 @@ func messageInsertArgs(m Message) []any {
 		m.contentObjectID, m.thinkingObjectID,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
+		!m.IsSystem && !IsSystemPrefixed(m.Content, m.Role),
 		m.Model, string(m.TokenUsage),
 		m.ContextTokens, m.OutputTokens,
 		m.HasContextTokens, m.HasOutputTokens,
