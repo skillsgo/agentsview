@@ -333,7 +333,7 @@ type SearchPage struct {
 //
 //  1. FTS branch — message content matches. ROW_NUMBER() picks the single
 //     best-ranked message per session (rank ASC, ordinal ASC, rowid ASC).
-//     The outer JOIN messages_fts includes a MATCH clause to prevent segment
+//     The outer JOIN content_fts includes a MATCH clause to prevent segment
 //     duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
 //  2. Name branch — display_name / first_message LIKE matches that are NOT
@@ -362,10 +362,10 @@ func (db *DB) Search(
 	// innerWhere is used in three places: the ROW_NUMBER inner subquery,
 	// the outer MATCH re-filter, and the NOT IN subquery for the name branch.
 	innerWhere := []string{
-		"messages_fts MATCH ?",
+		"content_fts MATCH ?",
 		"s2.deleted_at IS NULL",
 		"m2.is_system = 0",
-		SystemPrefixSQL("m2.content", "m2.role"),
+		SystemPrefixSQL("content_fts.content", "m2.role"),
 	}
 	ftsArgs := []any{f.Query} // args for one copy of innerWhere
 
@@ -396,15 +396,15 @@ func (db *DB) Search(
 	//  pos | SQL clause                                  | value
 	//  ----+---------------------------------------------+------------
 	//   0  | SELECT ? AS best_query (ROW_NUMBER)         | plainQuery  ← prepended in args2
-	//   1  | WHERE messages_fts MATCH ? (ROW_NUMBER)     | ftsArgs[0] (f.Query)
+	//   1  | WHERE content_fts MATCH ? (ROW_NUMBER)      | ftsArgs[0] (f.Query)
 	//  [1+]| AND s2.project = ? (if project set)         | ftsArgs[1] (f.Project)
-	//   2  | WHERE messages_fts MATCH ? (outer JOIN)     | f.Query
+	//   2  | WHERE content_fts MATCH ? (outer JOIN)      | f.Query
 	//   3  | WHEN COALESCE(display_name,session_name) LIKE ? (CASE) | likePattern
 	//   4  | WHEN s.first_message LIKE ? (CASE)          | likePattern
 	//   5  | WHERE COALESCE(display_name,session_name) LIKE ? (name WHERE) | likePattern
 	//   6  | WHERE s.first_message LIKE ? (name WHERE)   | likePattern
 	//  [7] | AND s.project = ? (name branch, optional)   | f.Project
-	//   8  | WHERE messages_fts MATCH ? (NOT IN)         | ftsArgs[0]
+	//   8  | WHERE content_fts MATCH ? (NOT IN)          | ftsArgs[0]
 	//  [8+]| AND s2.project = ? (NOT IN, if set)         | ftsArgs[1]
 	//   9  | LIMIT ? OFFSET ?                            | f.Limit+1, f.Cursor
 	args := make([]any, 0, len(ftsArgs)*2+6+len(nameProjectArgs))
@@ -427,35 +427,37 @@ func (db *DB) Search(
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
 				best.best_ordinal AS ordinal,
-				snippet(messages_fts, 0, '<mark>', '</mark>',
+				snippet(content_fts, 0, '<mark>', '</mark>',
 					'...', %d) AS snippet,
 				best.best_rank AS rank,
-				instr(LOWER(m.content), LOWER(best.best_query))
+				instr(LOWER(content_fts.content), LOWER(best.best_query))
 					AS match_pos
 			FROM (
-				SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
+				SELECT session_id, best_message_id, best_content_id,
+					best_ordinal, best_rank, best_query
 				FROM (
 					SELECT m2.session_id,
-						messages_fts.rowid AS best_rowid,
+						m2.id AS best_message_id,
+						content_fts.rowid AS best_content_id,
 						m2.ordinal AS best_ordinal,
 						rank AS best_rank,
 						? AS best_query,
 						ROW_NUMBER() OVER (
 							PARTITION BY m2.session_id
 							ORDER BY rank ASC, m2.ordinal ASC,
-								messages_fts.rowid ASC
+								m2.id ASC
 						) AS rn
-					FROM messages_fts
-					JOIN messages m2 ON messages_fts.rowid = m2.id
+					FROM content_fts
+					JOIN messages m2 ON m2.content_object_id = content_fts.rowid
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE %s
 				)
 				WHERE rn = 1
 			) AS best
-			JOIN messages_fts ON messages_fts.rowid = best.best_rowid
-			JOIN messages m ON m.id = best.best_rowid
+			JOIN content_fts ON content_fts.rowid = best.best_content_id
+			JOIN messages m ON m.id = best.best_message_id
 			JOIN sessions s ON m.session_id = s.id
-			WHERE messages_fts MATCH ?
+			WHERE content_fts MATCH ?
 
 			UNION ALL
 
@@ -479,15 +481,17 @@ func (db *DB) Search(
 				AND s.deleted_at IS NULL
 				AND EXISTS (
 					SELECT 1 FROM messages mx
+					JOIN content_fts mx_content
+					  ON mx_content.rowid = mx.content_object_id
 					WHERE mx.session_id = s.id
 					  AND mx.is_system = 0
-					  AND `+SystemPrefixSQL("mx.content", "mx.role")+`
+					  AND `+SystemPrefixSQL("mx_content.content", "mx.role")+`
 				)
 				%s
 				AND s.id NOT IN (
 					SELECT m2.session_id
-					FROM messages_fts
-					JOIN messages m2 ON messages_fts.rowid = m2.id
+					FROM content_fts
+					JOIN messages m2 ON m2.content_object_id = content_fts.rowid
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE %s
 				)
@@ -563,16 +567,27 @@ func (db *DB) SearchSession(
 	// the parent message ordinal; DISTINCT collapses multiple tool calls
 	// on the same message into a single result.
 	like := "%" + escapeLike(query) + "%"
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT DISTINCT m.ordinal
+	messageContent, messageJoin := "m.content", ""
+	resultContent, resultJoin := "tc.result_content", ""
+	if db.hasContentFTS() {
+		messageContent = "message_content.content"
+		messageJoin = "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+		resultContent = "result_content.content"
+		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+	}
+	searchSQL := fmt.Sprintf(`SELECT DISTINCT m.ordinal
 		 FROM messages m
+		 %s
 		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
+		 %s
 		 WHERE m.session_id = ?
 		   AND m.is_system = 0
-		   AND `+SystemPrefixSQL("m.content", "m.role")+`
-		   AND (m.content LIKE ? ESCAPE '\'
-		        OR tc.result_content LIKE ? ESCAPE '\')
-		 ORDER BY m.ordinal ASC`,
+		   AND %s
+		   AND (%s LIKE ? ESCAPE '\'
+		        OR %s LIKE ? ESCAPE '\')
+		 ORDER BY m.ordinal ASC`, messageJoin, resultJoin,
+		SystemPrefixSQL(messageContent, "m.role"), messageContent, resultContent)
+	rows, err := db.getReader().QueryContext(ctx, searchSQL,
 		sessionID, like, like,
 	)
 	if err != nil {
