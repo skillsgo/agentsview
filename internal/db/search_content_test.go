@@ -859,12 +859,21 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 		s.ParentSessionID = Ptr("boss")
 		s.RelationshipType = "subagent"
 	})
-	_, err := d.getWriter().Exec(`INSERT INTO tool_result_events
-		(session_id, tool_call_message_ordinal, tool_use_id, source, status,
-		 content, content_length, timestamp, event_index)
-		VALUES ('evorph', 7, 'tux', 'stdout', 'success',
-		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0)`)
-	require.NoError(t, err, "insert orphan event")
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID: "evorph", Ordinal: 7, Role: "assistant", Content: "temporary anchor",
+		ToolCalls: []ToolCall{{
+			ToolName: "Bash", ToolUseID: "tux",
+			ResultEvents: []ToolResultEvent{{
+				ToolUseID: "tux", Source: "stdout", Status: "success",
+				Content: "ORPHHIT event content", ContentLength: 21,
+				Timestamp: "2026-05-20T12:00:00Z", EventIndex: 0,
+			}},
+		}},
+	}}), "insert orphan event fixture")
+	_, err := d.getWriter().Exec(
+		"DELETE FROM messages WHERE session_id = 'evorph' AND ordinal = 7",
+	)
+	require.NoError(t, err, "remove event anchor")
 
 	seedUnitSession(t, d, "evrun", nil, []Message{
 		{Ordinal: 0, Role: "user", Content: "the question"},

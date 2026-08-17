@@ -215,25 +215,22 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
+	if !db.hasContentFTS() {
+		return db.searchContentObjects(ctx, f, nil)
+	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	like := "%" + escapeLike(f.Pattern) + "%"
 
 	var branches []string
 	var args []any
-	messageContent, messageJoin := "m.content", ""
-	inputContent, inputJoin := "tc.input_json", ""
-	resultContent, resultJoin := "tc.result_content", ""
-	eventContent, eventJoin := "tre.content", ""
-	if db.hasContentFTS() {
-		messageContent = "COALESCE(message_content.content, m.content)"
-		messageJoin = "LEFT JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
-		inputContent = "COALESCE(input_content.content, tc.input_json)"
-		inputJoin = "LEFT JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
-		resultContent = "COALESCE(result_content.content, tc.result_content)"
-		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
-		eventContent = "COALESCE(event_content.content, tre.content)"
-		eventJoin = "LEFT JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
-	}
+	messageContent := "message_content.content"
+	messageJoin := "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+	inputContent := "input_content.content"
+	inputJoin := "JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
+	resultContent := "result_content.content"
+	resultJoin := "JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+	eventContent := "event_content.content"
+	eventJoin := "JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
 
 	// The snippet column carries the full source field; the snippet is built in
 	// Go (substringSnippet) so secret redaction sees whole secrets, not a window
@@ -392,6 +389,9 @@ func (db *DB) searchContentRegex(
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
+	if !db.hasContentFTS() {
+		return db.searchContentObjects(ctx, f, re)
+	}
 	lit := literalPrefix(f.Pattern)
 
 	rows, err := db.regexCandidateRows(ctx, f, lit)
@@ -449,6 +449,155 @@ func (db *DB) searchContentRegex(
 	return page, nil
 }
 
+type contentObjectCandidate struct {
+	match    ContentMatch
+	objectID sql.NullInt64
+}
+
+// searchContentObjects is the feature-complete lexical path for SQLite
+// runtimes without FTS5. It scopes and orders lightweight references in SQL,
+// decodes each unique object once, then applies substring or RE2 matching in
+// Go. FTS-enabled runtimes keep using the indexed SQL paths above.
+func (db *DB) searchContentObjects(
+	ctx context.Context, f ContentSearchFilter, re *regexp.Regexp,
+) (ContentSearchPage, error) {
+	scope, scopeArgs := sessionScopeSubquery(f)
+	var branches []string
+	var args []any
+	if hasSource(f, "messages") {
+		systemClause := ""
+		if f.ExcludeSystem {
+			systemClause = "m.is_system = 0 AND "
+		}
+		branches = append(branches, `SELECT m.session_id, s.project, s.agent,
+			'message' AS location, m.role, '' AS tool_name, m.ordinal,
+			COALESCE(m.timestamp, '') AS ts,
+			m.content_object_id AS content_object_id,
+			COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+			0 AS src, m.id AS row_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE `+systemClause+`m.`+scope)
+		args = append(args, scopeArgs...)
+	}
+	if hasSource(f, "tool_input") {
+		branches = append(branches, `SELECT tc.session_id, s.project, s.agent,
+			'tool_input' AS location, 'assistant' AS role,
+			tc.tool_name, mm.ordinal, COALESCE(mm.timestamp, '') AS ts,
+			tc.input_object_id AS content_object_id,
+			COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+			1 AS src, tc.id AS row_id
+			FROM tool_calls tc JOIN messages mm ON mm.id = tc.message_id
+			JOIN sessions s ON s.id = tc.session_id
+			WHERE tc.`+scope)
+		args = append(args, scopeArgs...)
+	}
+	if hasSource(f, "tool_result") {
+		branches = append(branches, `SELECT tc.session_id, s.project, s.agent,
+			'tool_result' AS location, 'assistant' AS role,
+			tc.tool_name, mm.ordinal, COALESCE(mm.timestamp, '') AS ts,
+			tc.result_object_id AS content_object_id,
+			COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+			2 AS src, tc.id AS row_id
+			FROM tool_calls tc JOIN messages mm ON mm.id = tc.message_id
+			JOIN sessions s ON s.id = tc.session_id
+			WHERE NOT EXISTS (SELECT 1 FROM tool_result_events tre
+				WHERE tre.session_id = tc.session_id
+				  AND tre.tool_use_id = tc.tool_use_id
+				  AND tc.tool_use_id <> '') AND tc.`+scope)
+		args = append(args, scopeArgs...)
+		branches = append(branches, `SELECT tre.session_id, s.project, s.agent,
+			'tool_result' AS location, 'assistant' AS role, '' AS tool_name,
+			tre.tool_call_message_ordinal AS ordinal,
+			COALESCE(tre.timestamp, '') AS ts,
+			tre.content_object_id AS content_object_id,
+			COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+			3 AS src, tre.id AS row_id
+			FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
+			WHERE tre.`+scope)
+		args = append(args, scopeArgs...)
+	}
+	if len(branches) == 0 {
+		return ContentSearchPage{}, nil
+	}
+	query := `SELECT session_id, project, agent, location, role, tool_name,
+		ordinal, ts, content_object_id FROM (` + strings.Join(branches, " UNION ALL ") + `)
+		ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC`
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return ContentSearchPage{}, fmt.Errorf("querying content objects: %w", err)
+	}
+	var candidates []contentObjectCandidate
+	var objectIDs []int64
+	for rows.Next() {
+		var candidate contentObjectCandidate
+		if err := rows.Scan(&candidate.match.SessionID, &candidate.match.Project,
+			&candidate.match.Agent, &candidate.match.Location, &candidate.match.Role,
+			&candidate.match.ToolName, &candidate.match.Ordinal,
+			&candidate.match.Timestamp, &candidate.objectID); err != nil {
+			_ = rows.Close()
+			return ContentSearchPage{}, fmt.Errorf("scanning content object candidate: %w", err)
+		}
+		candidates = append(candidates, candidate)
+		if candidate.objectID.Valid {
+			objectIDs = append(objectIDs, candidate.objectID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return ContentSearchPage{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return ContentSearchPage{}, err
+	}
+	contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	needle := strings.ToLower(f.Pattern)
+	seen := 0
+	matches := make([]ContentMatch, 0, f.Limit+1)
+	for _, candidate := range candidates {
+		body := ""
+		if candidate.objectID.Valid {
+			body = contents[candidate.objectID.Int64]
+		}
+		if f.ExcludeSystem && candidate.match.Location == "message" &&
+			IsSystemPrefixed(body, candidate.match.Role) {
+			continue
+		}
+		var loc []int
+		if re != nil {
+			loc = re.FindStringIndex(body)
+		} else {
+			start := strings.Index(strings.ToLower(body), needle)
+			if start >= 0 {
+				loc = []int{start, start + len(f.Pattern)}
+			}
+		}
+		if loc == nil {
+			continue
+		}
+		if seen < f.Cursor {
+			seen++
+			continue
+		}
+		candidate.match.Snippet = f.buildSnippet(body, loc[0], loc[1])
+		matches = append(matches, candidate.match)
+		if len(matches) > f.Limit {
+			break
+		}
+	}
+	page := ContentSearchPage{Matches: matches}
+	if len(matches) > f.Limit {
+		page.Matches = matches[:f.Limit]
+		page.NextCursor = f.Cursor + f.Limit
+	}
+	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+		return ContentSearchPage{}, err
+	}
+	return page, nil
+}
+
 // regexCandidateRows returns full-body rows for the selected sources,
 // LIKE-prefiltered by lit when non-empty, ordered for stable paging.
 // Each branch selects: session_id, project, agent, location, role,
@@ -460,20 +609,14 @@ func (db *DB) regexCandidateRows(
 	scope, scopeArgs := sessionScopeSubquery(f)
 	var branches []string
 	var args []any
-	messageContent, messageJoin := "m.content", ""
-	inputContent, inputJoin := "tc.input_json", ""
-	resultContent, resultJoin := "tc.result_content", ""
-	eventContent, eventJoin := "tre.content", ""
-	if db.hasContentFTS() {
-		messageContent = "COALESCE(message_content.content, m.content)"
-		messageJoin = "LEFT JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
-		inputContent = "COALESCE(input_content.content, tc.input_json)"
-		inputJoin = "LEFT JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
-		resultContent = "COALESCE(result_content.content, tc.result_content)"
-		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
-		eventContent = "COALESCE(event_content.content, tre.content)"
-		eventJoin = "LEFT JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
-	}
+	messageContent := "message_content.content"
+	messageJoin := "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+	inputContent := "input_content.content"
+	inputJoin := "JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
+	resultContent := "result_content.content"
+	resultJoin := "JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+	eventContent := "event_content.content"
+	eventJoin := "JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
 
 	addLike := func() { args = append(args, "%"+escapeLike(lit)+"%") }
 
@@ -1404,12 +1547,6 @@ const enrichHitsChunk = maxSQLVars / 2
 func (db *DB) enrichSemanticHits(
 	ctx context.Context, hits []VectorHit,
 ) (map[semanticHitKey]semanticHitInfo, error) {
-	contentExpr := "m.content"
-	contentJoin := ""
-	if db.hasContentFTS() {
-		contentExpr = "content_fts.content"
-		contentJoin = " JOIN content_fts ON content_fts.rowid = m.content_object_id"
-	}
 	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
 	for start := 0; start < len(hits); start += enrichHitsChunk {
 		chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
@@ -1423,28 +1560,39 @@ func (db *DB) enrichSemanticHits(
 		query := "WITH hits(session_id, ordinal) AS (VALUES " +
 			strings.Join(values, ", ") + ") " +
 			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-			"COALESCE(m.timestamp, ''), " + contentExpr + ", " +
+			"COALESCE(m.timestamp, ''), m.content_object_id, " +
 			"COALESCE(s.relationship_type, ''), " +
 			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 			"FROM hits h " +
 			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-			"JOIN sessions s ON s.id = m.session_id" + contentJoin
+			"JOIN sessions s ON s.id = m.session_id"
 
 		rows, err := db.getReader().QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("semantic search enrich: %w", err)
 		}
+		type enrichedRef struct {
+			key      semanticHitKey
+			info     semanticHitInfo
+			objectID sql.NullInt64
+		}
+		var refs []enrichedRef
+		var objectIDs []int64
 		for rows.Next() {
 			var key semanticHitKey
 			var info semanticHitInfo
+			var objectID sql.NullInt64
 			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-				&info.role, &key.ordinal, &info.timestamp, &info.content,
+				&info.role, &key.ordinal, &info.timestamp, &objectID,
 				&info.relationshipType, &info.parentSessionID,
 				&info.isSidechain); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan semantic hit: %w", err)
 			}
-			out[key] = info
+			refs = append(refs, enrichedRef{key: key, info: info, objectID: objectID})
+			if objectID.Valid {
+				objectIDs = append(objectIDs, objectID.Int64)
+			}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -1452,6 +1600,16 @@ func (db *DB) enrichSemanticHits(
 		}
 		if err := rows.Close(); err != nil {
 			return nil, err
+		}
+		contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			if ref.objectID.Valid {
+				ref.info.content = contents[ref.objectID.Int64]
+			}
+			out[ref.key] = ref.info
 		}
 	}
 	return out, nil
