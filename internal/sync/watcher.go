@@ -1050,6 +1050,10 @@ func (w *Watcher) Stop() {
 	<-done
 }
 
+// Done is closed when the watcher loop exits. Embedding supervisors use it to
+// distinguish an intentional context shutdown from an unexpected watcher exit.
+func (w *Watcher) Done() <-chan struct{} { return w.done }
+
 func (w *Watcher) beginStopping() {
 	w.dispatchMu.Lock()
 	defer w.dispatchMu.Unlock()

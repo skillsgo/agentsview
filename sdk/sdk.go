@@ -35,11 +35,18 @@ type BackgroundSyncOptions struct {
 	OnComplete   func(SyncResult, error)
 }
 
+type BackgroundSyncStatus struct {
+	State               string
+	ConsecutiveFailures int
+	LastError           string
+}
+
 type BackgroundSync struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	watcher *avsync.Watcher
-	once    sync.Once
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
+	mu     sync.RWMutex
+	status BackgroundSyncStatus
 }
 
 func Open(c Config) (*Archive, error) {
@@ -138,54 +145,119 @@ func (a *Archive) StartBackgroundSync(
 		options.PollInterval = 5 * time.Minute
 	}
 	backgroundCtx, cancel := context.WithCancel(ctx)
-	recovery := &avsync.WatchRecoveryScope{AvailableRoots: append([]string(nil), a.roots...)}
 	notify := func(result SyncResult, err error) {
 		if options.OnComplete != nil {
-			options.OnComplete(result, err)
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						err = fmt.Errorf("sdk: background callback panic: %v", recovered)
+					}
+				}()
+				options.OnComplete(result, err)
+			}()
 		}
 	}
+	background := &BackgroundSync{cancel: cancel, done: make(chan struct{})}
+	background.setStatus("starting", 0, nil)
+	go func() {
+		defer close(background.done)
+		failures := 0
+		for backgroundCtx.Err() == nil {
+			err := a.runBackgroundGeneration(backgroundCtx, options, notify, background)
+			if backgroundCtx.Err() != nil {
+				break
+			}
+			failures++
+			background.setStatus("retrying", failures, err)
+			notify(SyncResult{}, err)
+			delay := time.Second << min(failures-1, 6)
+			timer := time.NewTimer(delay)
+			select {
+			case <-backgroundCtx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+		background.setStatus("stopped", failures, backgroundCtx.Err())
+	}()
+	return background, nil
+}
+
+func (a *Archive) runBackgroundGeneration(
+	ctx context.Context, options BackgroundSyncOptions,
+	notify func(SyncResult, error), background *BackgroundSync,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("sdk: background sync panic: %v", recovered)
+		}
+	}()
+	recovery := &avsync.WatchRecoveryScope{AvailableRoots: append([]string(nil), a.roots...)}
 	watcher, err := avsync.NewWatcherWithCallback(
 		options.Debounce, options.Debounce,
-		func(callbackCtx context.Context, batch avsync.WatchBatch) error {
-			err := avsync.ApplyWatchBatch(callbackCtx, a.engine, batch, recovery)
-			notify(SyncResult{}, err)
-			return err
+		func(callbackCtx context.Context, batch avsync.WatchBatch) (callbackErr error) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					callbackErr = fmt.Errorf("sdk: watcher callback panic: %v", recovered)
+				}
+				notify(SyncResult{}, callbackErr)
+			}()
+			return avsync.ApplyWatchBatch(callbackCtx, a.engine, batch, recovery)
 		}, nil, avsync.WatcherOptions{},
 	)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("sdk: create archive watcher: %w", err)
+		return fmt.Errorf("sdk: create archive watcher: %w", err)
 	}
+	defer watcher.Stop()
 	for _, root := range a.roots {
 		if _, statErr := os.Stat(root); statErr == nil {
 			watcher.WatchRecursive(root)
 		}
 	}
 	if err := watcher.StartCollecting(); err != nil {
-		cancel()
-		watcher.Stop()
-		return nil, fmt.Errorf("sdk: start archive watcher: %w", err)
+		return fmt.Errorf("sdk: start archive watcher: %w", err)
 	}
-	background := &BackgroundSync{cancel: cancel, done: make(chan struct{}), watcher: watcher}
-	go func() {
-		defer close(background.done)
-		result, syncErr := a.Sync(backgroundCtx)
-		notify(result, syncErr)
-		watcher.OpenDispatch()
-		ticker := time.NewTicker(options.PollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-backgroundCtx.Done():
-				watcher.Stop()
-				return
-			case <-ticker.C:
-				result, syncErr = a.Sync(backgroundCtx)
-				notify(result, syncErr)
+	result, err := a.Sync(ctx)
+	notify(result, err)
+	if err != nil {
+		return err
+	}
+	background.setStatus("running", 0, nil)
+	watcher.OpenDispatch()
+	ticker := time.NewTicker(options.PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-watcher.Done():
+			return errors.New("sdk: archive watcher stopped unexpectedly")
+		case <-ticker.C:
+			result, err = a.Sync(ctx)
+			notify(result, err)
+			if err != nil {
+				return err
 			}
 		}
-	}()
-	return background, nil
+	}
+}
+
+func (b *BackgroundSync) setStatus(state string, failures int, err error) {
+	b.mu.Lock()
+	b.status = BackgroundSyncStatus{State: state, ConsecutiveFailures: failures}
+	if err != nil {
+		b.status.LastError = err.Error()
+	}
+	b.mu.Unlock()
+}
+
+func (b *BackgroundSync) Status() BackgroundSyncStatus {
+	if b == nil {
+		return BackgroundSyncStatus{State: "stopped"}
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.status
 }
 
 func (b *BackgroundSync) Close() {
