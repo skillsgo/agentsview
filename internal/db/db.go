@@ -425,8 +425,6 @@ const dataVersion = 88
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
-const toolCallFieldBackfillStatsKey = "tool_call_field_backfill_v1"
-
 const (
 	walJournalSizeLimitBytes = 256 * 1024 * 1024
 	walCheckpointThreshold   = 512 * 1024 * 1024
@@ -1732,10 +1730,6 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT",
 		},
 		{
-			"tool_calls", "input_json",
-			"ALTER TABLE tool_calls ADD COLUMN input_json TEXT",
-		},
-		{
 			"tool_calls", "skill_name",
 			"ALTER TABLE tool_calls ADD COLUMN skill_name TEXT",
 		},
@@ -2087,10 +2081,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN claude_linear_parse INTEGER",
 		},
 		{
-			"messages", "thinking_text",
-			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
-		},
-		{
 			"messages", "is_embeddable",
 			"ALTER TABLE messages ADD COLUMN is_embeddable INTEGER NOT NULL DEFAULT 0",
 		},
@@ -2145,10 +2135,6 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"insights", "structured_json",
 			"ALTER TABLE insights ADD COLUMN structured_json TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"tool_calls", "result_content",
-			"ALTER TABLE tool_calls ADD COLUMN result_content TEXT",
 		},
 		{
 			"tool_calls", "file_path",
@@ -2521,9 +2507,6 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
 		return fmt.Errorf("backfilling automated sessions: %w", err)
-	}
-	if err := db.backfillToolCallFieldsLocked(w); err != nil {
-		return fmt.Errorf("backfilling tool-call fields: %w", err)
 	}
 	if _, err := w.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
@@ -3236,84 +3219,6 @@ func (db *DB) backfillIsAutomatedLocked(w *writerHandle) error {
 	); err != nil {
 		return fmt.Errorf(
 			"storing classifier hash: %w", err,
-		)
-	}
-	return nil
-}
-
-// backfillToolCallFieldsLocked fills file_path and call_index on tool_calls
-// rows that predate those columns. file_path is extracted from valid JSON
-// only (raw-diff inputs stay NULL); call_index is the 0-based position within
-// the message by insertion id. Both UPDATEs touch only NULL rows, so the work
-// is idempotent, but a stats sentinel makes it run once per database: after a
-// resync (or the first populate) every row already carries the columns, so
-// later Opens skip the unindexed full-table NULL scan. Caller holds db.mu.
-func (db *DB) backfillToolCallFieldsLocked(w *writerHandle) error {
-	should, err := db.shouldRunToolCallFieldBackfillLocked(w)
-	if err != nil {
-		return err
-	}
-	if !should {
-		return nil
-	}
-	if _, err := w.Exec(`
-		UPDATE tool_calls
-		SET file_path = COALESCE(
-			json_extract(input_json,'$.file_path'),
-			json_extract(input_json,'$.path'),
-			json_extract(input_json,'$.filePath'),
-			json_extract(input_json,'$.file'))
-		WHERE category IN ('Edit','Write')
-		  AND file_path IS NULL
-		  AND input_json IS NOT NULL
-		  AND json_valid(input_json)`); err != nil {
-		return fmt.Errorf("backfilling tool_calls.file_path: %w", err)
-	}
-	if _, err := w.Exec(`
-		UPDATE tool_calls
-		SET call_index = (
-			SELECT COUNT(*) FROM tool_calls t2
-			WHERE t2.message_id = tool_calls.message_id
-			  AND t2.id < tool_calls.id)
-		WHERE call_index IS NULL`); err != nil {
-		return fmt.Errorf("backfilling tool_calls.call_index: %w", err)
-	}
-	return db.markToolCallFieldBackfillDoneLocked(w)
-}
-
-// shouldRunToolCallFieldBackfillLocked reports whether the one-time
-// tool_calls file_path/call_index backfill still needs to run. Caller holds
-// db.mu.
-func (db *DB) shouldRunToolCallFieldBackfillLocked(
-	w *writerHandle,
-) (bool, error) {
-	var done int
-	if err := w.QueryRow(
-		`SELECT count(*)
-		 FROM stats
-		 WHERE key = ? AND value != 0`,
-		toolCallFieldBackfillStatsKey,
-	).Scan(&done); err != nil {
-		return false, fmt.Errorf(
-			"probing tool_call field backfill marker: %w", err,
-		)
-	}
-	return done == 0, nil
-}
-
-// markToolCallFieldBackfillDoneLocked records that the one-time tool_calls
-// field backfill has completed so later Opens skip it. Caller holds db.mu.
-func (db *DB) markToolCallFieldBackfillDoneLocked(
-	w *writerHandle,
-) error {
-	if _, err := w.Exec(
-		`INSERT INTO stats (key, value)
-		 VALUES (?, 1)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		toolCallFieldBackfillStatsKey,
-	); err != nil {
-		return fmt.Errorf(
-			"storing tool_call field backfill marker: %w", err,
 		)
 	}
 	return nil
@@ -4066,23 +3971,6 @@ func (db *DB) init() error {
 	w := db.getWriter()
 	if err := execSchemaScriptLocked(w); err != nil {
 		return err
-	}
-
-	// Add result_content column to tool_calls if not present
-	// (non-destructive migration for existing databases).
-	var rcCount int
-	if err := w.QueryRow(
-		`SELECT count(*) FROM pragma_table_info('tool_calls')` +
-			` WHERE name = 'result_content'`,
-	).Scan(&rcCount); err != nil {
-		return fmt.Errorf("probing result_content column: %w", err)
-	}
-	if rcCount == 0 {
-		if _, err := w.Exec(
-			`ALTER TABLE tool_calls ADD COLUMN result_content TEXT`,
-		); err != nil {
-			return fmt.Errorf("adding result_content column: %w", err)
-		}
 	}
 
 	var contentFTSCount int

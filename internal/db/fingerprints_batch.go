@@ -507,14 +507,15 @@ func (db *DB) ToolResultEventFingerprintsWithTimestampNormalizer(
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
 		rows, err := db.getReader().Query(`
-			SELECT session_id, tool_call_message_ordinal, call_index,
+			SELECT e.session_id, e.tool_call_message_ordinal, e.call_index,
 				event_index, COALESCE(tool_use_id, ''),
 				COALESCE(agent_id, ''),
 				COALESCE(subagent_session_id, ''), source, status,
-				content, content_length, COALESCE(timestamp, '')
-			 FROM tool_result_events
-			 WHERE session_id IN (`+ph+`)
-			 ORDER BY session_id, tool_call_message_ordinal ASC,
+				co.digest, content_length, COALESCE(timestamp, '')
+			 FROM tool_result_events e
+			 LEFT JOIN content_objects co ON co.id = e.content_object_id
+			 WHERE e.session_id IN (`+ph+`)
+			 ORDER BY e.session_id, tool_call_message_ordinal ASC,
 				call_index ASC, event_index ASC`,
 			args...,
 		)
@@ -529,7 +530,7 @@ func (db *DB) ToolResultEventFingerprintsWithTimestampNormalizer(
 			if err := rows.Scan(
 				&sessionID, &r.messageOrdinal, &r.callIndex, &r.eventIndex,
 				&r.toolUseID, &r.agentID, &r.subagentSessionID,
-				&r.source, &r.status, &r.content, &r.contentLength,
+				&r.source, &r.status, &r.contentDigest, &r.contentLength,
 				&r.timestamp,
 			); err != nil {
 				return err
@@ -804,6 +805,7 @@ type toolResultEventFingerprintRow struct {
 	source            string
 	status            string
 	content           string
+	contentDigest     []byte
 	contentLength     int
 	timestamp         string
 }
@@ -820,8 +822,12 @@ func (r toolResultEventFingerprintRow) appendTo(
 	subagentSessionID := SanitizeUTF8(r.subagentSessionID)
 	source := SanitizeUTF8(r.source)
 	status := SanitizeUTF8(r.status)
-	content := SanitizeUTF8(r.content)
-	contentSum := sha256.Sum256([]byte(content))
+	contentSum := sha256.Sum256(nil)
+	if len(r.contentDigest) == sha256.Size {
+		copy(contentSum[:], r.contentDigest)
+	} else if r.content != "" {
+		contentSum = sha256.Sum256([]byte(SanitizeUTF8(r.content)))
+	}
 	fmt.Fprintf(b,
 		"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%x|%d:%s;",
 		r.messageOrdinal, r.callIndex, r.eventIndex,

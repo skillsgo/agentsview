@@ -145,19 +145,6 @@ func TestAgentContentStoreHydratesFromAuthoritativeObjects(t *testing.T) {
 		}},
 	}}))
 
-	_, err := database.getWriter().Exec(
-		"UPDATE messages SET content = 'stale', thinking_text = 'stale'",
-	)
-	require.NoError(t, err)
-	_, err = database.getWriter().Exec(
-		"UPDATE tool_calls SET input_json = 'stale', result_content = 'stale'",
-	)
-	require.NoError(t, err)
-	_, err = database.getWriter().Exec(
-		"UPDATE tool_result_events SET content = 'stale'",
-	)
-	require.NoError(t, err)
-
 	messages, err := database.GetAllMessages(context.Background(), "hydrate-content")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)

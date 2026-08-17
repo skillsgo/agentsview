@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -486,10 +487,18 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	rewrite, err := external.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	defer rewrite.Rollback()
+	encoder, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+		zstd.WithEncoderConcurrency(1))
+	require.NoError(t, err)
+	defer encoder.Close()
+	changedObjectID, err := putAgentContentTx(
+		rewrite, encoder, "The evidence changed before import commit.",
+	)
+	require.NoError(t, err)
 	_, err = rewrite.Exec(`
-		UPDATE messages
-		SET content = 'The evidence changed before import commit.'
-		WHERE session_id = 's1' AND ordinal = 4`)
+		UPDATE messages SET content_object_id = ?
+		WHERE session_id = 's1' AND ordinal = 4`, changedObjectID)
 	require.NoError(t, err)
 
 	type importOutcome struct {

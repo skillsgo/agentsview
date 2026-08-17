@@ -1595,11 +1595,11 @@ func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
 		{"s-fork", "2026-04-10T10:03:00Z", unique, "msg_uniq", "req_uniq", 1},
 	} {
 		mustExec(`INSERT INTO messages
-			(session_id, ordinal, role, content, timestamp,
+			(session_id, ordinal, role, timestamp,
 			 model, token_usage,
 			 claude_message_id, claude_request_id,
 			 has_output_tokens, has_context_tokens)
-			VALUES (?, ?, 'assistant', '', ?, 'claude-opus-4-6', ?, ?, ?, 1, 1)`,
+			VALUES (?, ?, 'assistant', ?, 'claude-opus-4-6', ?, ?, ?, 1, 1)`,
 			row.sid, row.ord, row.ts, row.usage, row.mid, row.rid)
 	}
 

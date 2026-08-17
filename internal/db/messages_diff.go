@@ -18,7 +18,7 @@ const diffDeleteChunkSize = 500
 // so the persisted tuple has exactly one definition.
 func messageInsertArgs(m Message) []any {
 	return []any{
-		m.SessionID, m.Ordinal, m.Role, m.Content, m.ThinkingText,
+		m.SessionID, m.Ordinal, m.Role,
 		m.contentObjectID, m.thinkingObjectID,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
@@ -48,6 +48,10 @@ var messageUpdateSetClause = func() string {
 // Both sides go through the same resolve helpers the insert path
 // uses, so equality is defined on exactly the persisted tuples.
 func messageRowEqual(a, b Message) bool {
+	if SanitizeUTF8(a.Content) != SanitizeUTF8(b.Content) ||
+		SanitizeUTF8(a.ThinkingText) != SanitizeUTF8(b.ThinkingText) {
+		return false
+	}
 	a.contentObjectID, a.thinkingObjectID = nil, nil
 	b.contentObjectID, b.thinkingObjectID = nil, nil
 	aArgs, bArgs := messageInsertArgs(a), messageInsertArgs(b)

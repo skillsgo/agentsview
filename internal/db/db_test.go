@@ -778,95 +778,6 @@ func TestOpenDataVersionBump_SurvivesRestart(t *testing.T) {
 		"second reopen: expected NeedsResync=true")
 }
 
-func TestMigration_ResultContentColumn(t *testing.T) {
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-
-	// Create a DB with the current schema then drop the
-	// result_content column to simulate a pre-migration DB.
-	d := testDBAtPath(t, path, "initial migration db")
-	insertSession(t, d, "s1", "proj")
-	insertMessages(t, d,
-		userMsg("s1", 0, "hello"),
-		Message{
-			SessionID:  "s1",
-			Ordinal:    1,
-			Role:       "assistant",
-			Content:    "Let me read that.",
-			HasToolUse: true,
-			ToolCalls: []ToolCall{{
-				SessionID:           "s1",
-				ToolName:            "Read",
-				Category:            "Read",
-				ToolUseID:           "tu1",
-				ResultContentLength: 42,
-			}},
-		},
-	)
-	d.Close()
-
-	// Remove result_content via raw SQL: recreate tool_calls
-	// without the column to simulate a legacy schema.
-	conn, err := sql.Open("sqlite3", path)
-	requireNoError(t, err, "raw open")
-	_, err = conn.Exec(`
-		CREATE TABLE tool_calls_old AS
-			SELECT id, message_id, session_id, tool_name,
-			       category, tool_use_id, input_json,
-			       skill_name, result_content_length,
-			       subagent_session_id
-			FROM tool_calls;
-		DROP TABLE tool_calls;
-		ALTER TABLE tool_calls_old RENAME TO tool_calls;
-	`)
-	requireNoError(t, err, "drop result_content column")
-
-	// Verify column is gone and tool_calls row exists.
-	var count int
-	err = conn.QueryRow(
-		`SELECT count(*) FROM pragma_table_info('tool_calls')` +
-			` WHERE name = 'result_content'`,
-	).Scan(&count)
-	requireNoError(t, err, "verify column removed")
-	require.Equal(t, 0, count,
-		"expected result_content column to be absent")
-	var tcCount int
-	err = conn.QueryRow(
-		`SELECT count(*) FROM tool_calls`,
-	).Scan(&tcCount)
-	requireNoError(t, err, "count tool_calls pre-migration")
-	require.Equal(t, 1, tcCount, "expected 1 tool_call row, got")
-	conn.Close()
-
-	// Reopen with Open() — migration should add the column.
-	d2, err := Open(path)
-	requireNoError(t, err, "reopen after migration")
-	defer d2.Close()
-
-	// Verify column exists.
-	err = d2.getReader().QueryRow(
-		`SELECT count(*) FROM pragma_table_info('tool_calls')` +
-			` WHERE name = 'result_content'`,
-	).Scan(&count)
-	requireNoError(t, err, "verify column added")
-	require.Equal(t, 1, count,
-		"expected result_content column after migration")
-
-	// Verify tool_calls row preserved with fields intact.
-	msgs, err := d2.GetMessages(
-		context.Background(), "s1", 0, 100, true,
-	)
-	requireNoError(t, err, "get messages")
-	require.Len(t, msgs, 2, "expected 2 messages")
-	require.Len(t, msgs[1].ToolCalls, 1, "expected 1 tool call, got")
-	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "Read", tc.ToolName, "ToolName")
-	assert.Equal(t, "tu1", tc.ToolUseID, "ToolUseID")
-	assert.Equal(t, 42, tc.ResultContentLength, "ResultContentLength")
-	assert.Equal(t, "", tc.ResultContent, "ResultContent")
-}
-
 func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -3628,17 +3539,22 @@ func TestToolCallNewColumns(t *testing.T) {
 		}},
 	})
 
-	var toolUseID, inputJSON sql.NullString
+	var toolUseID sql.NullString
+	var inputObjectID sql.NullInt64
 	var resultLen sql.NullInt64
 	err := d.Reader().QueryRow(`
-        SELECT tool_use_id, input_json, result_content_length
+        SELECT tool_use_id, input_object_id, result_content_length
         FROM tool_calls WHERE session_id = 's1'
-    `).Scan(&toolUseID, &inputJSON, &resultLen)
+    `).Scan(&toolUseID, &inputObjectID, &resultLen)
 	requireNoError(t, err, "query tool_calls")
 	require.True(t, toolUseID.Valid, "tool_use_id valid")
 	assert.Equal(t, "toolu_abc", toolUseID.String, "tool_use_id")
-	require.True(t, inputJSON.Valid, "input_json valid")
-	assert.Equal(t, `{"file_path":"main.go"}`, inputJSON.String, "input_json")
+	require.True(t, inputObjectID.Valid, "input object valid")
+	content, err := readAgentContent(t.Context(), func(query string, args ...any) rowScanner {
+		return d.getReader().QueryRow(query, args...)
+	}, inputObjectID.Int64)
+	require.NoError(t, err)
+	assert.Equal(t, `{"file_path":"main.go"}`, content, "input content")
 	require.True(t, resultLen.Valid, "result_content_length valid")
 	assert.Equal(t, int64(500), resultLen.Int64, "result_content_length")
 }
@@ -3940,15 +3856,13 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 		"s1", nil, update,
 	), "incremental write")
 
-	var subagent, content string
-	var contentLen int
-	require.NoError(t, d.Reader().QueryRow(`
-		SELECT COALESCE(subagent_session_id, ''), result_content_length,
-		       COALESCE(result_content, '')
-		FROM tool_calls
-		WHERE session_id = ? AND tool_use_id = ?`,
-		"s1", "toolu_blocked",
-	).Scan(&subagent, &contentLen, &content), "query linked result")
+	stored, err := d.GetAllMessages(context.Background(), "s1")
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.Len(t, stored[0].ToolCalls, 1)
+	call := stored[0].ToolCalls[0]
+	subagent, contentLen, content := call.SubagentSessionID,
+		call.ResultContentLength, call.ResultContent
 	assert.Equal(t, "agent-child", subagent)
 	assert.Equal(t, len("secret result"), contentLen)
 	assert.Empty(t, content)
@@ -4010,15 +3924,16 @@ func TestWriteSessionIncrementalResultOnlyLink(t *testing.T) {
 	}
 	require.NoError(t, d.WriteSessionIncremental("s1", nil, update))
 
-	var subagent, content string
-	var contentLen int
-	require.NoError(t, d.Reader().QueryRow(`
-		SELECT COALESCE(subagent_session_id, ''), result_content_length,
-		       COALESCE(result_content, '')
-		FROM tool_calls
-		WHERE session_id = ? AND tool_use_id = ?`,
-		"s1", "toolu_bash",
-	).Scan(&subagent, &contentLen, &content))
+	stored, err := d.GetAllMessages(context.Background(), "s1")
+	require.NoError(t, err)
+	var linked ToolCall
+	for _, call := range stored[0].ToolCalls {
+		if call.ToolUseID == "toolu_bash" {
+			linked = call
+		}
+	}
+	subagent, contentLen, content := linked.SubagentSessionID,
+		linked.ResultContentLength, linked.ResultContent
 	assert.Empty(t, subagent)
 	assert.Equal(t, len("late result"), contentLen)
 	assert.Equal(t, "late result", content)
@@ -5237,12 +5152,11 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 		UPDATE messages SET is_system = 1
 		WHERE session_id = 'subtype-changed'`)
 	requireNoError(t, err, "mark source system message")
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category, input_json, call_index)
-		SELECT id, session_id, 'Read', 'file', '{"path":"old"}', 0
-		FROM messages WHERE session_id = 'tool-changed'`)
-	requireNoError(t, err, "insert source tool call")
+	requireNoError(t, srcDB.ReplaceSessionMessages("tool-changed", []Message{{
+		SessionID: "tool-changed", Ordinal: 0, Role: "assistant", Content: "tool",
+		ToolCalls: []ToolCall{{ToolName: "Read", Category: "file",
+			InputJSON: `{"path":"old"}`}},
+	}}), "insert source tool call")
 	_, err = srcDB.getWriter().Exec(
 		`UPDATE sessions SET transcript_revision = '7'`,
 	)
@@ -5270,12 +5184,11 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 		SET is_system = 1, source_subtype = 'resume'
 		WHERE session_id = 'subtype-changed'`)
 	requireNoError(t, err, "change destination display fields")
-	_, err = dstDB.getWriter().Exec(`
-		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category, input_json, call_index)
-		SELECT id, session_id, 'Read', 'file', '{"path":"new"}', 0
-		FROM messages WHERE session_id = 'tool-changed'`)
-	requireNoError(t, err, "insert destination tool call")
+	requireNoError(t, dstDB.ReplaceSessionMessages("tool-changed", []Message{{
+		SessionID: "tool-changed", Ordinal: 0, Role: "assistant", Content: "tool",
+		ToolCalls: []ToolCall{{ToolName: "Read", Category: "file",
+			InputJSON: `{"path":"new"}`}},
+	}}), "insert destination tool call")
 	name := "metadata-only rename"
 	requireNoError(t, dstDB.RenameSession("unchanged", &name), "rename session")
 
@@ -5333,32 +5246,18 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 	requireNoError(t, err, "insert tool_call")
 
 	insertSession(t, srcDB, "tool-result", "proj")
-	insertMessages(t, srcDB,
-		userMsg("tool-result", 0, "hello"),
-		asstMsg("tool-result", 1, "waited on child"),
-	)
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category,
-			 tool_use_id, result_content_length, result_content)
-		SELECT id, session_id, 'wait', 'Other',
-			'call_wait', 23, 'Finished successfully'
-		FROM messages
-		WHERE session_id = 'tool-result' AND ordinal = 1`,
-	)
-	requireNoError(t, err, "insert tool_call")
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO tool_result_events
-			(session_id, tool_call_message_ordinal, call_index,
-			 tool_use_id, agent_id, subagent_session_id,
-			 source, status, content, content_length,
-			 timestamp, event_index)
-		VALUES
-			('tool-result', 1, 0, 'call_wait', 'agent-1', 'codex:agent-1',
-			 'wait_output', 'completed', 'Finished successfully',
-			 23, '2026-03-27T18:00:00Z', 0)`,
-	)
-	requireNoError(t, err, "insert tool_result_event")
+	insertMessages(t, srcDB, userMsg("tool-result", 0, "hello"), Message{
+		SessionID: "tool-result", Ordinal: 1, Role: "assistant",
+		Content: "waited on child", ToolCalls: []ToolCall{{
+			ToolName: "wait", Category: "Other", ToolUseID: "call_wait",
+			ResultContent: "Finished successfully", ResultContentLength: 23,
+			ResultEvents: []ToolResultEvent{{ToolUseID: "call_wait",
+				AgentID: "agent-1", SubagentSessionID: "codex:agent-1",
+				Source: "wait_output", Status: "completed",
+				Content: "Finished successfully", ContentLength: 23,
+				Timestamp: "2026-03-27T18:00:00Z"}},
+		}},
+	})
 
 	insertSession(t, srcDB, "system", "proj")
 	systemMsg := userMsg("system", 0, "system init")
@@ -5388,19 +5287,14 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 	insertMessages(t, srcDB, userMsg("named", 0, "hello"))
 
 	insertSession(t, srcDB, "file-call", "proj")
-	insertMessages(t, srcDB,
-		userMsg("file-call", 0, "hello"),
-		asstMsg("file-call", 1, "used a tool"),
-	)
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, file_path, call_index)
-		SELECT id, session_id, 'Edit', 'Edit',
-			'tu_fp1', '{"file_path":"/repo/main.go"}', '/repo/main.go', 0
-		FROM messages
-		WHERE session_id = 'file-call' AND ordinal = 1`)
-	require.NoError(t, err, "insert file path tool_call")
+	insertMessages(t, srcDB, userMsg("file-call", 0, "hello"), Message{
+		SessionID: "file-call", Ordinal: 1, Role: "assistant",
+		Content: "used a tool", ToolCalls: []ToolCall{{
+			ToolName: "Edit", Category: "Edit", ToolUseID: "tu_fp1",
+			InputJSON: `{"file_path":"/repo/main.go"}`,
+			FilePath:  "/repo/main.go", CallIndex: 0,
+		}},
+	})
 	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstPath := filepath.Join(dir, "new.db")
@@ -5543,12 +5437,10 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 	require.NotNil(t, pins[0].Note, "pin note nil")
 	require.Equal(t, note, *pins[0].Note, "pin note")
 
-	var messageContent string
-	requireNoError(t, dstDB.getReader().QueryRow(
-		"SELECT content FROM messages WHERE id = ?",
-		pins[0].MessageID,
-	).Scan(&messageContent), "query pinned message")
-	require.Equal(t, "keep this pinned", messageContent, "pinned content")
+	message, err := dstDB.GetMessageByOrdinal("s1", 0)
+	requireNoError(t, err, "query pinned message")
+	require.NotNil(t, message)
+	require.Equal(t, "keep this pinned", message.Content, "pinned content")
 }
 
 func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
@@ -5591,72 +5483,6 @@ func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 	require.Empty(t, page.Sessions,
 		"expected 0 sessions after failed copy, got %d",
 		len(page.Sessions))
-}
-
-func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
-	dir := t.TempDir()
-
-	// Source DB with is_system column removed to simulate
-	// a legacy database.
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
-	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
-	srcDB.Close()
-
-	// Drop is_system via raw SQL to simulate legacy schema.
-	raw, err := sql.Open("sqlite3", srcPath)
-	requireNoError(t, err, "raw open")
-	// SQLite doesn't support DROP COLUMN before 3.35;
-	// recreate the table without is_system.
-	_, err = raw.Exec(`
-		CREATE TABLE messages_new (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			ordinal INTEGER NOT NULL,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL DEFAULT '',
-			timestamp TEXT NOT NULL DEFAULT '',
-			has_thinking INTEGER NOT NULL DEFAULT 0,
-			has_tool_use INTEGER NOT NULL DEFAULT 0,
-			content_length INTEGER NOT NULL DEFAULT 0
-		)`)
-	requireNoError(t, err, "create messages_new")
-	_, err = raw.Exec(`
-		INSERT INTO messages_new
-			(id, session_id, ordinal, role, content,
-			 timestamp, has_thinking, has_tool_use,
-			 content_length)
-		SELECT id, session_id, ordinal, role, content,
-			timestamp, has_thinking, has_tool_use,
-			content_length
-		FROM messages`)
-	requireNoError(t, err, "copy to messages_new")
-	_, err = raw.Exec("DROP TABLE messages")
-	requireNoError(t, err, "drop messages")
-	_, err = raw.Exec(
-		"ALTER TABLE messages_new RENAME TO messages",
-	)
-	requireNoError(t, err, "rename messages_new")
-	raw.Close()
-
-	// Empty destination (has is_system column).
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned, got")
-
-	// Message should be copied with is_system defaulting to
-	// false.
-	msgs, err := dstDB.GetMessages(
-		context.Background(), "s1", 0, 100, true,
-	)
-	requireNoError(t, err, "GetMessages")
-	require.Len(t, msgs, 1, "expected 1 message")
-	assert.False(t, msgs[0].IsSystem, "is_system should default to false")
 }
 
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
@@ -7241,11 +7067,11 @@ func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 	requireNoError(t, err, "insert session")
 	_, err = d.getWriter().Exec(
 		`INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp,
+			session_id, ordinal, role, timestamp,
 			token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"current", 0, "assistant", "hello",
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"current", 0, "assistant",
 		tsZero, `{"input_tokens":0,"output_tokens":0}`, 0, 0,
 		false, false,
 	)
@@ -7348,11 +7174,11 @@ func TestBackfillMessageTokenCoverageSkipsRowsWithoutTokenSignals(
 	requireNoError(t, err, "insert session")
 	_, err = d.getWriter().Exec(
 		`INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp,
+			session_id, ordinal, role, timestamp,
 			token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"no-signal", 0, "assistant", "hello", tsZero, "", 0, 0,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"no-signal", 0, "assistant", tsZero, "", 0, 0,
 		false, false,
 	)
 	requireNoError(t, err, "insert message")
@@ -7385,10 +7211,10 @@ func TestOpenBackfillSessionTokenCoverageSkipsMessageScanWithoutCandidates(
 
 	_, err = d.getWriter().Exec(
 		`INSERT INTO messages (
-			session_id, ordinal, role, content,
+			session_id, ordinal, role,
 			has_context_tokens, has_output_tokens
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		"done", 0, "assistant", "hello", "not-a-bool", "not-a-bool",
+		) VALUES (?, ?, ?, ?, ?)`,
+		"done", 0, "assistant", "not-a-bool", "not-a-bool",
 	)
 	requireNoError(t, err, "insert message")
 
@@ -8942,134 +8768,4 @@ func TestUpsertWithDisplayNameInsteadOfSessionNameDropsName(t *testing.T) {
 	// display_name was passed in but upsert never writes it — should be nil.
 	assert.Nil(t, s.DisplayName,
 		"upsert must not write display_name; only RenameSession should")
-}
-
-// seedSessionWithMessage inserts a session and one user message (ordinal 0)
-// into d. The inserted message gets the next auto-assigned integer id.
-func seedSessionWithMessage(t *testing.T, d *DB, sessionID string) {
-	t.Helper()
-	insertSession(t, d, sessionID, "proj")
-	insertMessages(t, d, userMsg(sessionID, 0, "hello"))
-}
-
-// clearToolCallFieldBackfillSentinel removes the one-time backfill marker so a
-// test can drive backfillToolCallFieldsLocked as a first run against rows it
-// inserts after Open.
-func clearToolCallFieldBackfillSentinel(t *testing.T, d *DB) {
-	t.Helper()
-	_, err := d.getWriter().Exec(
-		`DELETE FROM stats WHERE key = ?`, toolCallFieldBackfillStatsKey)
-	require.NoError(t, err, "clear tool_call backfill sentinel")
-}
-
-func TestBackfillToolCallFields(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	seedSessionWithMessage(t, d, "sess-bf") // message id = 1
-
-	var msgID int64
-	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT id FROM messages WHERE session_id = 'sess-bf' AND ordinal = 0`,
-	).Scan(&msgID))
-
-	w := d.getWriter()
-	_, err := w.Exec(`INSERT INTO tool_calls
-		(message_id, session_id, tool_name, category, tool_use_id, input_json,
-		 file_path, call_index)
-		VALUES
-		(?,?,?,?,?,?,NULL,NULL),
-		(?,?,?,?,?,?,NULL,NULL),
-		(?,?,?,?,?,?,NULL,NULL)`,
-		msgID, "sess-bf", "Edit", "Edit", "a", `{"file_path":"/x.go"}`,
-		msgID, "sess-bf", "Edit", "Edit", "b", "a raw diff not json",
-		msgID, "sess-bf", "Write", "Write", "c", `{"file":"/y.go"}`,
-	)
-	require.NoError(t, err, "insert legacy tool_calls")
-
-	// Open already ran the one-time backfill on the empty table during
-	// testDB setup; clear the sentinel so it runs against these legacy rows
-	// the way it would when columns are first added to a populated database.
-	clearToolCallFieldBackfillSentinel(t, d)
-	require.NoError(t, d.backfillToolCallFieldsLocked(w), "backfill")
-
-	type row struct {
-		fp sql.NullString
-		ci int
-	}
-	rows := map[string]row{}
-	r, err := w.QueryContext(ctx,
-		`SELECT tool_use_id, file_path, call_index FROM tool_calls`)
-	require.NoError(t, err)
-	defer r.Close()
-	for r.Next() {
-		var id string
-		var fp sql.NullString
-		var ci int
-		require.NoError(t, r.Scan(&id, &fp, &ci))
-		rows[id] = row{fp, ci}
-	}
-	require.NoError(t, r.Err())
-	assert.Equal(t, "/x.go", rows["a"].fp.String, "a file_path")
-	assert.False(t, rows["b"].fp.Valid, "b file_path should be NULL (raw diff)")
-	assert.Equal(t, "/y.go", rows["c"].fp.String, "c file_path")
-	assert.Equal(t, 0, rows["a"].ci, "a call_index")
-	assert.Equal(t, 1, rows["b"].ci, "b call_index")
-	assert.Equal(t, 2, rows["c"].ci, "c call_index")
-}
-
-func TestBackfillToolCallFieldsRunsOnce(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	seedSessionWithMessage(t, d, "sess-once")
-
-	var msgID int64
-	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT id FROM messages WHERE session_id = 'sess-once' AND ordinal = 0`,
-	).Scan(&msgID))
-
-	w := d.getWriter()
-	insertNullEdit := func(toolUseID, inputJSON string) {
-		t.Helper()
-		_, err := w.Exec(`INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category, tool_use_id,
-			 input_json, file_path, call_index)
-			VALUES (?,?,?,?,?,?,NULL,NULL)`,
-			msgID, "sess-once", "Edit", "Edit", toolUseID, inputJSON)
-		require.NoError(t, err, "insert %s", toolUseID)
-	}
-
-	// Open already ran (and sentineled) the backfill on the empty table;
-	// clear it so this first manual run does real work, as it would when
-	// columns are first added to a populated database.
-	clearToolCallFieldBackfillSentinel(t, d)
-
-	// First run backfills the legacy row and records the sentinel.
-	insertNullEdit("first", `{"file_path":"/first.go"}`)
-	require.NoError(t, d.backfillToolCallFieldsLocked(w), "first backfill")
-
-	should, err := d.shouldRunToolCallFieldBackfillLocked(w)
-	require.NoError(t, err, "probe sentinel")
-	assert.False(t, should, "sentinel should be set after first backfill")
-
-	// A row inserted after the sentinel is set must be left untouched: the
-	// gate skips the rerun instead of rescanning tool_calls. This is what
-	// distinguishes one-time gating from plain per-Open idempotency.
-	insertNullEdit("second", `{"file_path":"/second.go"}`)
-	require.NoError(t, d.backfillToolCallFieldsLocked(w), "second backfill")
-
-	fp := map[string]sql.NullString{}
-	r, err := w.QueryContext(ctx,
-		`SELECT tool_use_id, file_path FROM tool_calls`)
-	require.NoError(t, err)
-	defer r.Close()
-	for r.Next() {
-		var id string
-		var p sql.NullString
-		require.NoError(t, r.Scan(&id, &p))
-		fp[id] = p
-	}
-	require.NoError(t, r.Err())
-	assert.Equal(t, "/first.go", fp["first"].String, "first row backfilled")
-	assert.False(t, fp["second"].Valid,
-		"second row left NULL: one-time gate skipped the rerun")
 }

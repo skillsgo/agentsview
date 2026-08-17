@@ -520,6 +520,9 @@ func sessionMessagesTx(
 	if closeErr != nil {
 		return nil, closeErr
 	}
+	if err := hydrateMessageContents(ctx, tx, msgs); err != nil {
+		return nil, err
+	}
 	if err := attachToolCallsWithQuerier(ctx, tx, msgs); err != nil {
 		return nil, err
 	}

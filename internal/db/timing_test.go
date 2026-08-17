@@ -336,16 +336,10 @@ func timingInsertMessage(
 	role, content, ts string, hasToolUse bool,
 ) {
 	t.Helper()
-	flag := 0
-	if hasToolUse {
-		flag = 1
-	}
-	_, err := d.getWriter().ExecContext(context.Background(), `
-		INSERT INTO messages
-			(session_id, ordinal, role, content, timestamp,
-			 has_tool_use)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, sessionID, ordinal, role, content, ts, flag)
+	err := d.InsertMessages([]Message{{
+		SessionID: sessionID, Ordinal: ordinal, Role: role,
+		Content: content, Timestamp: ts, HasToolUse: hasToolUse,
+	}})
 	require.NoError(t, err, "timingInsertMessage %s/%d", sessionID, ordinal)
 }
 
@@ -376,8 +370,8 @@ func timingInsertToolCall(
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO tool_calls
 			(session_id, message_id, tool_use_id, tool_name,
-			 category, input_json, subagent_session_id, call_index)
-		VALUES (?, ?, ?, ?, ?, '{}', ?, 0)
+			 category, subagent_session_id, call_index)
+		VALUES (?, ?, ?, ?, ?, ?, 0)
 	`, sessionID, messageID, toolUseID, toolName, category, sub)
 	require.NoError(t, err, "timingInsertToolCall %s/%d", sessionID, messageID)
 }
@@ -390,8 +384,8 @@ func timingInsertToolResultEvent(
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
-			 tool_use_id, source, status, content, timestamp, event_index)
-		VALUES (?, ?, ?, ?, 'tool_execution', ?, '', ?, ?)
+			 tool_use_id, source, status, timestamp, event_index)
+		VALUES (?, ?, ?, ?, 'tool_execution', ?, ?, ?)
 	`, sessionID, messageOrdinal, callIndex, toolUseID, status, timestamp,
 		eventIndex)
 	require.NoError(t, err, "timingInsertToolResultEvent %s/%d", sessionID,

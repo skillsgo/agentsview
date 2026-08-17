@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	selectMessageCols = `id, session_id, ordinal, role, content, thinking_text,
+	selectMessageCols = `id, session_id, ordinal, role,
 		content_object_id, thinking_object_id,
 		COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
@@ -30,7 +30,7 @@ const (
 		source_type, source_subtype, prompt_source, source_uuid,
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
-	insertMessageCols = `session_id, ordinal, role, content, thinking_text,
+	insertMessageCols = `session_id, ordinal, role,
 		content_object_id, thinking_object_id,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system, is_embeddable,
@@ -52,9 +52,9 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 34 // 29 params per row
-	toolCallInsertRowsPerStmt        = 71 // 14 params per row
-	toolResultEventInsertRowsPerStmt = 76 // 13 params per row
+	messageInsertRowsPerStmt         = 37 // 27 params per row
+	toolCallInsertRowsPerStmt        = 82 // 12 params per row
+	toolResultEventInsertRowsPerStmt = 82 // 12 params per row
 )
 
 // ToolCall represents a single tool invocation stored in
@@ -821,7 +821,7 @@ func insertPreparedMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*29)
+		args := make([]any, 0, len(batch)*27)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -831,7 +831,7 @@ func insertPreparedMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 29),
+			multiRowPlaceholders(len(batch), 27),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -877,17 +877,15 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx *sql.Tx, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*14)
+	args := make([]any, 0, len(calls)*12)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
 			tc.ToolName, tc.Category,
 			nilIfEmpty(tc.ToolUseID),
-			nilIfEmpty(tc.InputJSON),
 			tc.inputObjectID,
 			nilIfEmpty(tc.SkillName),
 			nilIfZero(tc.ResultContentLength),
-			nilIfEmpty(tc.ResultContent),
 			tc.resultObjectID,
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
@@ -897,10 +895,10 @@ func insertToolCallsChunkTx(
 	query := `
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, input_object_id, skill_name,
-			 result_content_length, result_content, result_object_id, subagent_session_id,
+			 tool_use_id, input_object_id, skill_name,
+			 result_content_length, result_object_id, subagent_session_id,
 			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 14)
+		VALUES ` + multiRowPlaceholders(len(calls), 12)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -913,7 +911,7 @@ func insertToolCallsChunkTx(
 func insertToolResultEventsChunkTx(
 	tx *sql.Tx, rows []toolResultEventRow,
 ) error {
-	args := make([]any, 0, len(rows)*13)
+	args := make([]any, 0, len(rows)*12)
 	for _, r := range rows {
 		args = append(args,
 			r.SessionID, r.MessageOrdinal, r.CallIndex,
@@ -921,7 +919,6 @@ func insertToolResultEventsChunkTx(
 			nilIfEmpty(r.Event.AgentID),
 			nilIfEmpty(r.Event.SubagentSessionID),
 			r.Event.Source, r.Event.Status,
-			r.Event.Content,
 			r.Event.contentObjectID,
 			r.Event.ContentLength,
 			nilIfEmpty(r.Event.Timestamp),
@@ -932,9 +929,9 @@ func insertToolResultEventsChunkTx(
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
-			 source, status, content, content_object_id, content_length,
+			 source, status, content_object_id, content_length,
 			 timestamp, event_index)
-		VALUES ` + multiRowPlaceholders(len(rows), 13)
+		VALUES ` + multiRowPlaceholders(len(rows), 12)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_result_events batch (%d rows): %w",
@@ -1926,8 +1923,8 @@ func attachToolCallsBatch(
 
 	query := fmt.Sprintf(`
 		SELECT message_id, session_id, tool_name, category,
-			tool_use_id, input_json, input_object_id, skill_name,
-			result_content_length, result_content, result_object_id,
+			tool_use_id, input_object_id, skill_name,
+			result_content_length, result_object_id,
 			subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
@@ -1943,17 +1940,17 @@ func attachToolCallsBatch(
 
 	for rows.Next() {
 		var tc ToolCall
-		var toolUseID, inputJSON, skillName sql.NullString
+		var toolUseID, skillName sql.NullString
 		var inputObjectID, resultObjectID sql.NullInt64
-		var subagentSessionID, resultContent sql.NullString
+		var subagentSessionID sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
 		var callIndex sql.NullInt64
 		if err := rows.Scan(
 			&tc.MessageID, &tc.SessionID,
 			&tc.ToolName, &tc.Category,
-			&toolUseID, &inputJSON, &inputObjectID, &skillName,
-			&resultLen, &resultContent, &resultObjectID,
+			&toolUseID, &inputObjectID, &skillName,
+			&resultLen, &resultObjectID,
 			&subagentSessionID,
 			&filePath, &callIndex,
 		); err != nil {
@@ -1965,9 +1962,6 @@ func attachToolCallsBatch(
 		if inputObjectID.Valid {
 			tc.inputObjectID = &inputObjectID.Int64
 		}
-		if inputJSON.Valid {
-			tc.InputJSON = inputJSON.String
-		}
 		if skillName.Valid {
 			tc.SkillName = skillName.String
 		}
@@ -1976,9 +1970,6 @@ func attachToolCallsBatch(
 		}
 		if resultObjectID.Valid {
 			tc.resultObjectID = &resultObjectID.Int64
-		}
-		if resultContent.Valid {
-			tc.ResultContent = resultContent.String
 		}
 		if subagentSessionID.Valid {
 			tc.SubagentSessionID = subagentSessionID.String
@@ -2078,7 +2069,7 @@ func attachToolResultEventsBatch(
 	query := fmt.Sprintf(`
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_object_id, content_length,
+			source, status, content_object_id, content_length,
 			timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ? AND tool_call_message_ordinal IN (%s)
@@ -2104,7 +2095,7 @@ func attachToolResultEventsBatch(
 		if err := rows.Scan(
 			&msgOrdinal, &callIndex,
 			&toolUseID, &agentID, &subID,
-			&ev.Source, &ev.Status, &ev.Content, &ev.contentObjectID,
+			&ev.Source, &ev.Status, &ev.contentObjectID,
 			&ev.ContentLength, &timestamp, &ev.EventIndex,
 		); err != nil {
 			return fmt.Errorf("scanning tool_result_event: %w", err)
@@ -2172,7 +2163,6 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		var tokenUsage string
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText,
 			&m.contentObjectID, &m.thinkingObjectID, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
@@ -2660,9 +2650,9 @@ func applyToolCallSubagentLinkTx(
 	_, err = tx.Exec(
 		`UPDATE tool_calls
 		 SET subagent_session_id = ?, result_content_length = ?,
-		     result_content = ?, result_object_id = ?
+		     result_object_id = ?
 		 WHERE session_id = ? AND tool_use_id = ?`,
-		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent, resultObjectID,
+		nilIfEmpty(currentSubagent), link.ResultContentLen, resultObjectID,
 		sessionID, link.ToolUseID,
 	)
 	return err == nil, err
@@ -2784,12 +2774,13 @@ func (db *DB) ToolResultEventFingerprintWithTimestampNormalizer(
 	normalizeTimestamp func(string) string,
 ) (string, error) {
 	rows, err := db.getReader().Query(
-		`SELECT tool_call_message_ordinal, call_index, event_index,
+		`SELECT e.tool_call_message_ordinal, e.call_index, e.event_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
-			content, content_length, COALESCE(timestamp, '')
-		 FROM tool_result_events
-		 WHERE session_id = ?
+			co.digest, content_length, COALESCE(timestamp, '')
+		 FROM tool_result_events e
+		 LEFT JOIN content_objects co ON co.id = e.content_object_id
+		 WHERE e.session_id = ?
 		 ORDER BY tool_call_message_ordinal ASC, call_index ASC, event_index ASC`,
 		sessionID,
 	)
@@ -2804,7 +2795,7 @@ func (db *DB) ToolResultEventFingerprintWithTimestampNormalizer(
 		if err := rows.Scan(
 			&r.messageOrdinal, &r.callIndex, &r.eventIndex,
 			&r.toolUseID, &r.agentID, &r.subagentSessionID,
-			&r.source, &r.status, &r.content, &r.contentLength,
+			&r.source, &r.status, &r.contentDigest, &r.contentLength,
 			&r.timestamp,
 		); err != nil {
 			return "", err
@@ -2828,7 +2819,6 @@ func (db *DB) GetMessageByOrdinal(
 	var tokenUsage string
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText,
 		&m.contentObjectID, &m.thinkingObjectID, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,

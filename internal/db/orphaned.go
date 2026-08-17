@@ -212,11 +212,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
 		}
-		if err := sanitizeCopiedSessionContent(
-			ctx, tx, "_orphaned_ids", sourceVersion,
-		); err != nil {
-			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -312,11 +307,6 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		ctx, tx, "_trashed_ids", sourceVersion,
 	); err != nil {
 		return 0, fmt.Errorf("repairing trashed identity snapshots: %w", err)
-	}
-	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_trashed_ids", sourceVersion,
-	); err != nil {
-		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1266,7 +1256,8 @@ func (d *DB) CopySessionMetadataFrom(
 					ON new_m.session_id = old_m.session_id
 					AND new_m.source_uuid = old_m.source_uuid
 					AND new_m.role = old_m.role
-					AND new_m.content = old_m.content
+					AND (SELECT digest FROM main.content_objects WHERE id = new_m.content_object_id)
+						IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				WHERE op.session_id IN (
 					SELECT id FROM main.sessions
 				)
@@ -1276,27 +1267,31 @@ func (d *DB) CopySessionMetadataFrom(
 					WHERE y.session_id = old_m.session_id
 					AND y.source_uuid = old_m.source_uuid
 					AND y.role = old_m.role
-					AND y.content = old_m.content
+					AND (SELECT digest FROM old_db.content_objects WHERE id = y.content_object_id)
+						IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				) = (
 					SELECT COUNT(*) FROM main.messages x
 					WHERE x.session_id = old_m.session_id
 					AND x.source_uuid = old_m.source_uuid
 					AND x.role = old_m.role
-					AND x.content = old_m.content
+					AND (SELECT digest FROM main.content_objects WHERE id = x.content_object_id)
+						IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				)
 				AND (
 					SELECT COUNT(*) FROM old_db.messages y2
 					WHERE y2.session_id = old_m.session_id
 					AND y2.source_uuid = old_m.source_uuid
 					AND y2.role = old_m.role
-					AND y2.content = old_m.content
+					AND (SELECT digest FROM old_db.content_objects WHERE id = y2.content_object_id)
+						IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 					AND y2.ordinal <= old_m.ordinal
 				) = (
 					SELECT COUNT(*) FROM main.messages x2
 					WHERE x2.session_id = old_m.session_id
 					AND x2.source_uuid = old_m.source_uuid
 					AND x2.role = old_m.role
-					AND x2.content = old_m.content
+					AND (SELECT digest FROM main.content_objects WHERE id = x2.content_object_id)
+						IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 					AND x2.ordinal <= new_m.ordinal
 				)`); err != nil {
 				return fmt.Errorf(
@@ -1343,7 +1338,8 @@ func (d *DB) CopySessionMetadataFrom(
 			JOIN main.messages new_m
 				ON new_m.session_id = old_m.session_id
 				AND new_m.role = old_m.role
-				AND new_m.content = old_m.content
+				AND (SELECT digest FROM main.content_objects WHERE id = new_m.content_object_id)
+					IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				AND new_m.is_system = 0
 			WHERE op.session_id IN (
 				SELECT id FROM main.sessions
@@ -1352,25 +1348,29 @@ func (d *DB) CopySessionMetadataFrom(
 				SELECT COUNT(*) FROM old_db.messages y
 				WHERE y.session_id = old_m.session_id
 				AND y.role = old_m.role
-				AND y.content = old_m.content`+oldYVisible+`
+				AND (SELECT digest FROM old_db.content_objects WHERE id = y.content_object_id)
+					IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)`+oldYVisible+`
 			) = (
 				SELECT COUNT(*) FROM main.messages x
 				WHERE x.session_id = old_m.session_id
 				AND x.role = old_m.role
-				AND x.content = old_m.content
+				AND (SELECT digest FROM main.content_objects WHERE id = x.content_object_id)
+					IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				AND x.is_system = 0
 			)
 			AND (
 				SELECT COUNT(*) FROM old_db.messages y2
 				WHERE y2.session_id = old_m.session_id
 				AND y2.role = old_m.role
-				AND y2.content = old_m.content
+				AND (SELECT digest FROM old_db.content_objects WHERE id = y2.content_object_id)
+					IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				AND y2.ordinal <= old_m.ordinal`+oldY2Visible+`
 			) = (
 				SELECT COUNT(*) FROM main.messages x2
 				WHERE x2.session_id = old_m.session_id
 				AND x2.role = old_m.role
-				AND x2.content = old_m.content
+				AND (SELECT digest FROM main.content_objects WHERE id = x2.content_object_id)
+					IS (SELECT digest FROM old_db.content_objects WHERE id = old_m.content_object_id)
 				AND x2.is_system = 0
 				AND x2.ordinal <= new_m.ordinal
 			)`); err != nil {
@@ -1718,18 +1718,10 @@ func reconcileTranscriptRevisionsTx(
 		return nil
 	}
 	for table, columns := range map[string][]string{
-		"messages": {
-			"thinking_text", "is_system", "model",
-			"context_tokens", "output_tokens",
-			"has_context_tokens", "has_output_tokens",
-			"source_subtype", "prompt_source", "is_compact_boundary",
-		},
-		"tool_calls": {
-			"call_index", "result_content", "file_path",
-		},
-		"tool_result_events": {
-			"call_index", "event_index",
-		},
+		"messages":           {"content_object_id", "thinking_object_id"},
+		"tool_calls":         {"call_index", "input_object_id", "result_object_id"},
+		"tool_result_events": {"call_index", "event_index", "content_object_id"},
+		"content_objects":    {"digest"},
 	} {
 		if !oldDBHasTable(ctx, tx, table) {
 			return nil
@@ -1746,86 +1738,114 @@ func reconcileTranscriptRevisionsTx(
 		SET transcript_revision = (
 			SELECT CASE WHEN
 				NOT EXISTS (
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT m.ordinal, m.role, content_co.digest, thinking_co.digest, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
-					FROM main.messages WHERE session_id = current.id
+					FROM main.messages m
+					LEFT JOIN main.content_objects content_co ON content_co.id = m.content_object_id
+					LEFT JOIN main.content_objects thinking_co ON thinking_co.id = m.thinking_object_id
+					WHERE session_id = current.id
 					EXCEPT
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT m.ordinal, m.role, content_co.digest, thinking_co.digest, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
-					FROM old_db.messages WHERE session_id = current.id
+					FROM old_db.messages m
+					LEFT JOIN old_db.content_objects content_co ON content_co.id = m.content_object_id
+					LEFT JOIN old_db.content_objects thinking_co ON thinking_co.id = m.thinking_object_id
+					WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT m.ordinal, m.role, content_co.digest, thinking_co.digest, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
-					FROM old_db.messages WHERE session_id = current.id
+					FROM old_db.messages m
+					LEFT JOIN old_db.content_objects content_co ON content_co.id = m.content_object_id
+					LEFT JOIN old_db.content_objects thinking_co ON thinking_co.id = m.thinking_object_id
+					WHERE session_id = current.id
 					EXCEPT
-					SELECT ordinal, role, content, thinking_text, timestamp,
+					SELECT m.ordinal, m.role, content_co.digest, thinking_co.digest, timestamp,
 						has_thinking, has_tool_use, is_system, model,
 						context_tokens, output_tokens, has_context_tokens,
 						has_output_tokens, source_subtype, prompt_source,
 						is_compact_boundary
-					FROM main.messages WHERE session_id = current.id
+					FROM main.messages m
+					LEFT JOIN main.content_objects content_co ON content_co.id = m.content_object_id
+					LEFT JOIN main.content_objects thinking_co ON thinking_co.id = m.thinking_object_id
+					WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.tool_use_id, input_co.digest, tc.skill_name,
+						result_co.digest, tc.subagent_session_id, tc.file_path
 					FROM main.tool_calls tc
 					JOIN main.messages m ON m.id = tc.message_id
+					LEFT JOIN main.content_objects input_co ON input_co.id = tc.input_object_id
+					LEFT JOIN main.content_objects result_co ON result_co.id = tc.result_object_id
 					WHERE tc.session_id = current.id
 					EXCEPT
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.tool_use_id, input_co.digest, tc.skill_name,
+						result_co.digest, tc.subagent_session_id, tc.file_path
 					FROM old_db.tool_calls tc
 					JOIN old_db.messages m ON m.id = tc.message_id
+					LEFT JOIN old_db.content_objects input_co ON input_co.id = tc.input_object_id
+					LEFT JOIN old_db.content_objects result_co ON result_co.id = tc.result_object_id
 					WHERE tc.session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.tool_use_id, input_co.digest, tc.skill_name,
+						result_co.digest, tc.subagent_session_id, tc.file_path
 					FROM old_db.tool_calls tc
 					JOIN old_db.messages m ON m.id = tc.message_id
+					LEFT JOIN old_db.content_objects input_co ON input_co.id = tc.input_object_id
+					LEFT JOIN old_db.content_objects result_co ON result_co.id = tc.result_object_id
 					WHERE tc.session_id = current.id
 					EXCEPT
 					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-						tc.tool_use_id, tc.input_json, tc.skill_name,
-						tc.result_content, tc.subagent_session_id, tc.file_path
+						tc.tool_use_id, input_co.digest, tc.skill_name,
+						result_co.digest, tc.subagent_session_id, tc.file_path
 					FROM main.tool_calls tc
 					JOIN main.messages m ON m.id = tc.message_id
+					LEFT JOIN main.content_objects input_co ON input_co.id = tc.input_object_id
+					LEFT JOIN main.content_objects result_co ON result_co.id = tc.result_object_id
 					WHERE tc.session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT tool_call_message_ordinal, call_index, tool_use_id,
-						agent_id, subagent_session_id, source, status, content,
+						agent_id, subagent_session_id, source, status, co.digest,
 						timestamp, event_index
-					FROM main.tool_result_events WHERE session_id = current.id
+					FROM main.tool_result_events e
+					LEFT JOIN main.content_objects co ON co.id = e.content_object_id
+					WHERE session_id = current.id
 					EXCEPT
 					SELECT tool_call_message_ordinal, call_index, tool_use_id,
-						agent_id, subagent_session_id, source, status, content,
+						agent_id, subagent_session_id, source, status, co.digest,
 						timestamp, event_index
-					FROM old_db.tool_result_events WHERE session_id = current.id
+					FROM old_db.tool_result_events e
+					LEFT JOIN old_db.content_objects co ON co.id = e.content_object_id
+					WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT tool_call_message_ordinal, call_index, tool_use_id,
-						agent_id, subagent_session_id, source, status, content,
+						agent_id, subagent_session_id, source, status, co.digest,
 						timestamp, event_index
-					FROM old_db.tool_result_events WHERE session_id = current.id
+					FROM old_db.tool_result_events e
+					LEFT JOIN old_db.content_objects co ON co.id = e.content_object_id
+					WHERE session_id = current.id
 					EXCEPT
 					SELECT tool_call_message_ordinal, call_index, tool_use_id,
-						agent_id, subagent_session_id, source, status, content,
+						agent_id, subagent_session_id, source, status, co.digest,
 						timestamp, event_index
-					FROM main.tool_result_events WHERE session_id = current.id
+					FROM main.tool_result_events e
+					LEFT JOIN main.content_objects co ON co.id = e.content_object_id
+					WHERE session_id = current.id
 				)
 			THEN old.transcript_revision
 			ELSE CAST(CAST(old.transcript_revision AS INTEGER) + 1 AS TEXT)
@@ -1837,6 +1857,113 @@ func reconcileTranscriptRevisionsTx(
 			SELECT 1 FROM old_db.sessions AS old WHERE old.id = current.id
 		)`)
 	return err
+}
+
+func copyAgentContentObjectsForIDs(
+	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO main.content_objects
+			(digest, raw_size, codec, payload, ref_count)
+		SELECT DISTINCT co.digest, co.raw_size, co.codec, co.payload, 0
+		FROM old_db.content_objects co
+		WHERE co.id IN (
+			SELECT content_object_id FROM old_db.messages
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT thinking_object_id FROM old_db.messages
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT input_object_id FROM old_db.tool_calls
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT result_object_id FROM old_db.tool_calls
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT content_object_id FROM old_db.tool_result_events
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		)`)
+	if err != nil {
+		return fmt.Errorf("copying Agent content objects: %w", err)
+	}
+	return nil
+}
+
+func refreshAgentContentReferenceCountsTx(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE content_objects SET ref_count =
+		(SELECT count(*) FROM messages WHERE content_object_id = content_objects.id) +
+		(SELECT count(*) FROM messages WHERE thinking_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_calls WHERE input_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_calls WHERE result_object_id = content_objects.id) +
+		(SELECT count(*) FROM tool_result_events WHERE content_object_id = content_objects.id)`); err != nil {
+		return fmt.Errorf("refreshing Agent content reference counts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM content_objects WHERE ref_count = 0"); err != nil {
+		return fmt.Errorf("pruning copied Agent content: %w", err)
+	}
+	return nil
+}
+
+func projectCopiedAgentContentsTx(
+	ctx context.Context, tx *sql.Tx, tempIDsTable string,
+) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM main.sqlite_master
+		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
+		return fmt.Errorf("probing copied Agent content projection: %w", err)
+	}
+	if exists == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT co.id, co.codec, co.payload
+		FROM main.content_objects co
+		WHERE co.id IN (
+			SELECT content_object_id FROM main.messages
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT thinking_object_id FROM main.messages
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT input_object_id FROM main.tool_calls
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT result_object_id FROM main.tool_calls
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			UNION SELECT content_object_id FROM main.tool_result_events
+			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		)`)
+	if err != nil {
+		return fmt.Errorf("querying copied Agent content: %w", err)
+	}
+	type projection struct {
+		id      int64
+		content string
+	}
+	var projections []projection
+	for rows.Next() {
+		var id int64
+		var codec int
+		var payload []byte
+		if err := rows.Scan(&id, &codec, &payload); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scanning copied Agent content: %w", err)
+		}
+		raw, err := decodeAgentContentPayload(codec, payload)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		projections = append(projections, projection{id: id, content: string(raw)})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterating copied Agent content: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing copied Agent content: %w", err)
+	}
+	for _, item := range projections {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR REPLACE INTO content_fts(rowid, content) VALUES (?, ?)",
+			item.id, item.content); err != nil {
+			return fmt.Errorf("projecting copied Agent content: %w", err)
+		}
+	}
+	return nil
 }
 
 func copySessionDataForIDs(
@@ -1857,36 +1984,35 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying sessions: %w", err)
 	}
 
-	// Copy messages. Omit id to let auto-increment assign
-	// new IDs (old IDs may collide with freshly synced
-	// messages). Probe is_system so older source DBs that
-	// lack the column don't abort the migration.
-	var msgCols strings.Builder
-	msgCols.WriteString("session_id, ordinal, role, content, " +
-		"timestamp, has_thinking, has_tool_use, " +
-		"content_length")
-	if oldDBHasColumn(ctx, tx, "messages", "is_system") {
-		msgCols.WriteString(", is_system")
+	if err := copyAgentContentObjectsForIDs(ctx, tx, tempIDsTable); err != nil {
+		return err
 	}
-	for _, c := range []string{
-		"model", "token_usage", "context_tokens",
-		"output_tokens", "has_context_tokens",
-		"has_output_tokens",
-		"claude_message_id", "claude_request_id",
-		"source_type", "source_subtype", "prompt_source",
-		"source_uuid", "source_parent_uuid",
-		"is_sidechain", "is_compact_boundary",
-		"thinking_text",
-	} {
-		if oldDBHasColumn(ctx, tx, "messages", c) {
-			msgCols.WriteString(", " + c)
-		}
-	}
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO messages ("+msgCols.String()+") "+
-			"SELECT "+msgCols.String()+" FROM old_db.messages "+
-			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
-	); err != nil {
+
+	// Omit message ids because they may collide with freshly parsed rows. Body
+	// references are remapped by digest, the stable cross-database identity.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role,
+			content_object_id, thinking_object_id, timestamp,
+			has_thinking, has_tool_use, content_length, is_system,
+			is_embeddable, model, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, prompt_source,
+			source_uuid, source_parent_uuid, is_sidechain, is_compact_boundary)
+		SELECT om.session_id, om.ordinal, om.role,
+			content_new.id, thinking_new.id, om.timestamp,
+			om.has_thinking, om.has_tool_use, om.content_length, om.is_system,
+			om.is_embeddable, om.model, om.token_usage, om.context_tokens,
+			om.output_tokens, om.has_context_tokens, om.has_output_tokens,
+			om.claude_message_id, om.claude_request_id, om.source_type,
+			om.source_subtype, om.prompt_source, om.source_uuid,
+			om.source_parent_uuid, om.is_sidechain, om.is_compact_boundary
+		FROM old_db.messages om
+		LEFT JOIN old_db.content_objects content_old ON content_old.id = om.content_object_id
+		LEFT JOIN main.content_objects content_new ON content_new.digest = content_old.digest
+		LEFT JOIN old_db.content_objects thinking_old ON thinking_old.id = om.thinking_object_id
+		LEFT JOIN main.content_objects thinking_new ON thinking_new.digest = thinking_old.digest
+		WHERE om.session_id IN (SELECT id FROM `+tempIDsTable+`)`); err != nil {
 		return fmt.Errorf("copying messages: %w", err)
 	}
 
@@ -1916,47 +2042,26 @@ func copySessionDataForIDs(
 
 	// Copy tool_calls. Map old message_id to new
 	// message_id via the (session_id, ordinal) natural key.
-	toolCallCols := []string{
-		"message_id", "session_id", "tool_name", "category",
-		"tool_use_id", "input_json", "skill_name",
-		"result_content_length",
-	}
-	toolCallSelect := []string{
-		"new_m.id", "otc.session_id", "otc.tool_name",
-		"otc.category", "otc.tool_use_id", "otc.input_json",
-		"otc.skill_name", "otc.result_content_length",
-	}
-	if oldDBHasColumn(ctx, tx, "tool_calls", "result_content") {
-		toolCallCols = append(toolCallCols, "result_content")
-		toolCallSelect = append(toolCallSelect, "otc.result_content")
-	}
-	toolCallCols = append(toolCallCols, "subagent_session_id")
-	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
-	if oldDBHasColumn(ctx, tx, "tool_calls", "file_path") {
-		toolCallCols = append(toolCallCols, "file_path")
-		toolCallSelect = append(toolCallSelect, "otc.file_path")
-	} else {
-		toolCallCols = append(toolCallCols, "file_path")
-		toolCallSelect = append(toolCallSelect, "NULL")
-	}
-	if oldDBHasColumn(ctx, tx, "tool_calls", "call_index") {
-		toolCallCols = append(toolCallCols, "call_index")
-		toolCallSelect = append(toolCallSelect, "otc.call_index")
-	} else {
-		toolCallCols = append(toolCallCols, "call_index")
-		toolCallSelect = append(toolCallSelect, "NULL")
-	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tool_calls
-			(`+strings.Join(toolCallCols, ", ")+`)
-		SELECT
-			`+strings.Join(toolCallSelect, ", ")+`
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, tool_use_id,
+			input_object_id, skill_name, result_content_length,
+			result_object_id, subagent_session_id,
+			file_path, call_index)
+		SELECT new_m.id, otc.session_id, otc.tool_name, otc.category,
+			otc.tool_use_id, input_new.id, otc.skill_name,
+			otc.result_content_length, result_new.id,
+			otc.subagent_session_id, otc.file_path, otc.call_index
 		FROM old_db.tool_calls otc
 		JOIN old_db.messages old_m
 			ON old_m.id = otc.message_id
 		JOIN main.messages new_m
 			ON new_m.session_id = old_m.session_id
 			AND new_m.ordinal = old_m.ordinal
+		LEFT JOIN old_db.content_objects input_old ON input_old.id = otc.input_object_id
+		LEFT JOIN main.content_objects input_new ON input_new.digest = input_old.digest
+		LEFT JOIN old_db.content_objects result_old ON result_old.id = otc.result_object_id
+		LEFT JOIN main.content_objects result_new ON result_new.digest = result_old.digest
 		WHERE otc.session_id IN (
 			SELECT id FROM `+tempIDsTable+`
 		)
@@ -1971,16 +2076,18 @@ func copySessionDataForIDs(
 				(session_id, tool_call_message_ordinal,
 				 call_index, tool_use_id, agent_id,
 				 subagent_session_id, source, status,
-				 content, content_length, timestamp,
+				 content_object_id, content_length, timestamp,
 				 event_index)
 			SELECT
 				session_id, tool_call_message_ordinal,
 				call_index, tool_use_id, agent_id,
-				subagent_session_id, source, status,
-				content, content_length, timestamp,
-				event_index
-			FROM old_db.tool_result_events
-			WHERE session_id IN (
+				e.subagent_session_id, e.source, e.status,
+				content_new.id, e.content_length, e.timestamp,
+				e.event_index
+			FROM old_db.tool_result_events e
+			LEFT JOIN old_db.content_objects content_old ON content_old.id = e.content_object_id
+			LEFT JOIN main.content_objects content_new ON content_new.digest = content_old.digest
+			WHERE e.session_id IN (
 				SELECT id FROM `+tempIDsTable+`
 			)`,
 		); err != nil {
@@ -2012,6 +2119,12 @@ func copySessionDataForIDs(
 	}
 
 	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	if err := refreshAgentContentReferenceCountsTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := projectCopiedAgentContentsTx(ctx, tx, tempIDsTable); err != nil {
 		return err
 	}
 	return nil
@@ -2048,28 +2161,6 @@ func removeGeneratedIdentitySnapshotsWithoutSource(
 	return nil
 }
 
-// sanitizedSourceDataVersion is the first data version at which write
-// paths into an archive sanitize message content, tool result content,
-// and tool result events: dataVersion 58 forced a full resync that
-// re-ingested live sessions through SanitizeUTF8 and ran the copy-time
-// sanitize pass over preserved orphans, and later writers sanitize at
-// ingest. Copying from a source at or above this version skips those
-// row-by-row passes, which otherwise dominate resync time on large
-// archives.
-//
-// sanitizedInputSourceDataVersion is the same watermark for
-// tool_calls.input_json, which ingest did not sanitize until
-// dataVersion 59. Sources between the two versions only pay the
-// single-column input pass.
-//
-// Bump the relevant constant to the then-current dataVersion if
-// SanitizeUTF8 ever gains rules that must apply to already-stored
-// rows.
-const (
-	sanitizedSourceDataVersion      = 58
-	sanitizedInputSourceDataVersion = 59
-)
-
 // projectIdentitySourceSnapshotDataVersion is the first archive version whose
 // full reparse rebuilt immutable snapshots with the parser-source project
 // rather than a worktree mapping target. Older snapshots must not cross a
@@ -2088,280 +2179,6 @@ func copiedSourceDataVersion(ctx context.Context, tx *sql.Tx) int {
 		return 0
 	}
 	return version
-}
-
-func sanitizeCopiedSessionContent(
-	ctx context.Context,
-	tx *sql.Tx,
-	tempIDsTable string,
-	sourceVersion int,
-) error {
-	// Each pass runs only when the source predates the version at
-	// which ingest started sanitizing that field, so a v58 source
-	// upgrading to v59 pays only the single-column input pass.
-	if sourceVersion < sanitizedInputSourceDataVersion {
-		if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
-			return err
-		}
-	}
-	if sourceVersion >= sanitizedSourceDataVersion {
-		return nil
-	}
-	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
-		return err
-	}
-	if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {
-		return err
-	}
-	return sanitizeCopiedToolResultEvents(ctx, tx, tempIDsTable)
-}
-
-type copiedTextUpdate struct {
-	id      int64
-	content string
-	length  int
-}
-
-func sanitizeCopiedMessageContent(
-	ctx context.Context,
-	tx *sql.Tx,
-	tempIDsTable string,
-) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, content, content_length
-		 FROM main.messages
-		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying copied messages: %w", err)
-	}
-	defer rows.Close()
-
-	var updates []copiedTextUpdate
-	for rows.Next() {
-		var row copiedTextUpdate
-		var storedLength int
-		if err := rows.Scan(&row.id, &row.content, &storedLength); err != nil {
-			return fmt.Errorf("scanning copied message: %w", err)
-		}
-		sanitized := SanitizeUTF8(row.content)
-		if sanitized == row.content {
-			continue
-		}
-		row.length = sanitizedCopiedTextLength(
-			row.content, sanitized, storedLength,
-		)
-		row.content = sanitized
-		updates = append(updates, row)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating copied messages: %w", err)
-	}
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE main.messages
-			 SET content = ?, content_length = ?
-			 WHERE id = ?`,
-			row.content, row.length, row.id,
-		); err != nil {
-			return fmt.Errorf("updating copied message %d: %w", row.id, err)
-		}
-	}
-	return nil
-}
-
-type copiedNullableTextUpdate struct {
-	id      int64
-	content any
-	length  any
-}
-
-func sanitizeCopiedToolCallInputs(
-	ctx context.Context,
-	tx *sql.Tx,
-	tempIDsTable string,
-) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, input_json
-		 FROM main.tool_calls
-		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-		   AND input_json IS NOT NULL`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying copied tool call inputs: %w", err)
-	}
-	defer rows.Close()
-
-	var updates []copiedNullableTextUpdate
-	for rows.Next() {
-		var row copiedNullableTextUpdate
-		var content sql.NullString
-		if err := rows.Scan(&row.id, &content); err != nil {
-			return fmt.Errorf("scanning copied tool call input: %w", err)
-		}
-		if !content.Valid {
-			continue
-		}
-		sanitized := SanitizeUTF8(content.String)
-		if sanitized == content.String {
-			continue
-		}
-		if sanitized == "" {
-			row.content = nil
-		} else {
-			row.content = sanitized
-		}
-		updates = append(updates, row)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating copied tool call inputs: %w", err)
-	}
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE main.tool_calls
-			 SET input_json = ?
-			 WHERE id = ?`,
-			row.content, row.id,
-		); err != nil {
-			return fmt.Errorf("updating copied tool call input %d: %w", row.id, err)
-		}
-	}
-	return nil
-}
-
-func sanitizeCopiedToolCallResults(
-	ctx context.Context,
-	tx *sql.Tx,
-	tempIDsTable string,
-) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, result_content, result_content_length
-		 FROM main.tool_calls
-		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-		   AND result_content IS NOT NULL`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying copied tool calls: %w", err)
-	}
-	defer rows.Close()
-
-	var updates []copiedNullableTextUpdate
-	for rows.Next() {
-		var id int64
-		var content sql.NullString
-		var storedLength sql.NullInt64
-		if err := rows.Scan(&id, &content, &storedLength); err != nil {
-			return fmt.Errorf("scanning copied tool call: %w", err)
-		}
-		if !content.Valid {
-			continue
-		}
-		sanitized := SanitizeUTF8(content.String)
-		if sanitized == content.String {
-			continue
-		}
-		update := copiedNullableTextUpdate{id: id}
-		if sanitized == "" {
-			update.content = nil
-		} else {
-			update.content = sanitized
-		}
-		update.length = sanitizedCopiedNullableTextLength(
-			content.String, sanitized, storedLength,
-		)
-		updates = append(updates, update)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating copied tool calls: %w", err)
-	}
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE main.tool_calls
-			 SET result_content = ?, result_content_length = ?
-			 WHERE id = ?`,
-			row.content, row.length, row.id,
-		); err != nil {
-			return fmt.Errorf("updating copied tool call %d: %w", row.id, err)
-		}
-	}
-	return nil
-}
-
-func sanitizeCopiedToolResultEvents(
-	ctx context.Context,
-	tx *sql.Tx,
-	tempIDsTable string,
-) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, content, content_length
-		 FROM main.tool_result_events
-		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying copied tool result events: %w", err)
-	}
-	defer rows.Close()
-
-	var updates []copiedTextUpdate
-	for rows.Next() {
-		var row copiedTextUpdate
-		var storedLength int
-		if err := rows.Scan(&row.id, &row.content, &storedLength); err != nil {
-			return fmt.Errorf("scanning copied tool result event: %w", err)
-		}
-		sanitized := SanitizeUTF8(row.content)
-		if sanitized == row.content {
-			continue
-		}
-		row.length = sanitizedCopiedTextLength(
-			row.content, sanitized, storedLength,
-		)
-		row.content = sanitized
-		updates = append(updates, row)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating copied tool result events: %w", err)
-	}
-	for _, row := range updates {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE main.tool_result_events
-			 SET content = ?, content_length = ?
-			 WHERE id = ?`,
-			row.content, row.length, row.id,
-		); err != nil {
-			return fmt.Errorf(
-				"updating copied tool result event %d: %w",
-				row.id, err,
-			)
-		}
-	}
-	return nil
-}
-
-func sanitizedCopiedTextLength(
-	original, sanitized string,
-	storedLength int,
-) int {
-	removed := len(original) - len(sanitized)
-	if removed > 0 {
-		subtractRemovedBytes(&storedLength, removed)
-	}
-	return storedLength
-}
-
-func sanitizedCopiedNullableTextLength(
-	original, sanitized string,
-	storedLength sql.NullInt64,
-) any {
-	if !storedLength.Valid {
-		return nil
-	}
-	length := int(storedLength.Int64)
-	removed := len(original) - len(sanitized)
-	if removed > 0 {
-		subtractRemovedBytes(&length, removed)
-	}
-	return int64(length)
 }
 
 func copyPinnedMessagesForIDs(

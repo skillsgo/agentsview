@@ -337,11 +337,14 @@ func TestLoadArtifactExportDataDoesNotHydrateMismatchedNestedRows(t *testing.T) 
 	message, err := database.GetMessageByOrdinal("session", 0)
 	require.NoError(t, err)
 	require.NotNil(t, message)
-	_, err = database.getWriter().Exec(`
-		INSERT INTO tool_calls(
-			message_id, session_id, tool_name, category, input_json, call_index
-		) VALUES (?, 'foreign', 'Read', 'file', ?, 0)`,
-		message.ID, strings.Repeat("x", 2<<20),
+	require.NoError(t, database.ReplaceSessionMessages("foreign", []Message{{
+		SessionID: "foreign", Ordinal: 0, Role: "assistant", Content: "foreign",
+		ToolCalls: []ToolCall{{ToolName: "Read", Category: "file",
+			InputJSON: strings.Repeat("x", 2<<20)}},
+	}}))
+	_, err = database.getWriter().Exec(
+		"UPDATE tool_calls SET message_id = ? WHERE session_id = 'foreign'",
+		message.ID,
 	)
 	require.NoError(t, err)
 
@@ -368,19 +371,6 @@ func TestLoadArtifactExportDataHydratesAuthoritativeContent(t *testing.T) {
 			}},
 		}},
 	})
-	_, err := database.getWriter().Exec(
-		"UPDATE messages SET content = 'x', thinking_text = 'x'",
-	)
-	require.NoError(t, err)
-	_, err = database.getWriter().Exec(
-		"UPDATE tool_calls SET input_json = 'x', result_content = 'x'",
-	)
-	require.NoError(t, err)
-	_, err = database.getWriter().Exec(
-		"UPDATE tool_result_events SET content = 'x'",
-	)
-	require.NoError(t, err)
-
 	data, err := database.LoadArtifactExportData(
 		t.Context(), "session", smallArtifactExportLoadLimits(),
 	)
