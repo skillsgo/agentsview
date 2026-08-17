@@ -644,8 +644,11 @@ agentsview storage compare --archive /private/path/content-comparison.db
 
 The source archive is opened read-only. The comparison archive keeps semantic
 references for message content, thinking, tool inputs, tool results, and result
-events while storing exact content identities as deduplicated 256 KiB Zstd
-chunks. It is written with mode `0600`, published atomically, and rejected when
+events while storing exact content identities as deduplicated 256 KiB chunks.
+Content uses the highest klauspost Zstd level when it shrinks and stays raw for
+already-compressed payloads. Compact integer references and packed blobs avoid
+per-value SQLite page waste. It is written with mode `0600`, published
+atomically, and rejected when
 the destination already exists. By default the command reconstructs and hashes
 every unique object before reporting physical size, structural deduplication,
 compression payload, and per-role-field totals. This is an experimental

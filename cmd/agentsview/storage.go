@@ -92,7 +92,7 @@ func printContentArchiveReport(
 		{"Unique chunks", fmt.Sprintf("%d", report.UniqueChunks)},
 		{"Referenced raw content", formatBytes(report.ReferencedRawBytes)},
 		{"Unique raw content", formatBytes(report.UniqueRawBytes)},
-		{"Compressed chunk payload", formatBytes(report.CompressedChunkBytes)},
+		{"Encoded content payload", formatBytes(report.CompressedChunkBytes)},
 		{"Duplicate bytes eliminated", formatBytes(report.DuplicateBytesEliminated)},
 		{"Build duration", report.BuildDuration.Round(time.Millisecond).String()},
 		{"Full reconstruction verified", fmt.Sprintf("%t", verified)},
