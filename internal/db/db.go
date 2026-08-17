@@ -421,7 +421,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the real prompt, instead of leaving the raw wrapper in first_message and
 // the visible transcript. Existing rows need re-parsing so first_message
 // and message content drop the leading markup.)
-const dataVersion = 88
+// (89: Agent content is stored only in content-addressed objects. Rebuilding
+// the archive removes the former inline body columns while retaining the
+// complete structured transcript and FTS projection.)
+const dataVersion = 89
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -699,9 +699,11 @@ func TestDoSyncConfiguredFullUnifiedHTTPUsesManifestDeltaAndOrderedProgress(
 		"Downloading session archive from http-box",
 		"Extracting session archive from http-box",
 		"Processing sessions from http-box",
-		"Rebuilding search index",
-		"Swapping rebuilt database into place",
 	}
+	if database.HasFTS() {
+		labels = append(labels, "Rebuilding search index")
+	}
+	labels = append(labels, "Swapping rebuilt database into place")
 	previous := -1
 	for _, label := range labels {
 		position := strings.Index(progressOutput, label)

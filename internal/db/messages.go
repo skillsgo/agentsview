@@ -1193,8 +1193,7 @@ func (db *DB) LastClaudeMessageID(sessionID string) string {
 // pin's occurrence rank inside its identity group, guard the
 // fallback used for ambiguous source UUIDs: rank
 // follows a message across ordinal shifts that leave the group
-// intact, where a saved ordinal would name a different occurrence. The
-// inline content fallback exists only for rows predating Agent Store.
+// intact, where a saved ordinal would name a different occurrence.
 type savedPin struct {
 	sourceUUID          string
 	role                string

@@ -642,6 +642,16 @@ Backend modes:
 - DuckDB: optional mirror file or Quack endpoint; push from SQLite, serve
   read-only.
 
+The SQLite archive keeps structured agent facts in the message, tool-call, and
+tool-result tables while storing their exact bodies once in a
+content-addressed object table. Message text, thinking text, tool input, and
+tool output share the same SHA-256 identity space. Objects use the highest
+`klauspost/compress/zstd` level when that reduces size and otherwise retain the
+raw bytes. Integer object references preserve the complete transcript without
+duplicating repeated system prompts or replayed agent context. FTS5 remains a
+complete, rebuildable plaintext projection over every unique object, so this
+storage layout does not reduce search, export, SDK, or UI behavior.
+
 Troubleshooting:
 
 - If `duckdb push` fails to open the mirror, confirm the binary was built with

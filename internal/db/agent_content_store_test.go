@@ -2,11 +2,70 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAgentContentStoreSchemaHasOnlyObjectReferences(t *testing.T) {
+	database := testDB(t)
+
+	tests := []struct {
+		table      string
+		want       []string
+		deprecated []string
+	}{
+		{
+			table:      "messages",
+			want:       []string{"content_object_id", "thinking_object_id"},
+			deprecated: []string{"content", "thinking_text"},
+		},
+		{
+			table:      "tool_calls",
+			want:       []string{"input_object_id", "result_object_id"},
+			deprecated: []string{"input_json", "result_content"},
+		},
+		{
+			table:      "tool_result_events",
+			want:       []string{"content_object_id"},
+			deprecated: []string{"content"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.table, func(t *testing.T) {
+			columns := tableColumnNames(t, database.getReader(), tc.table)
+			for _, column := range tc.want {
+				assert.Contains(t, columns, column)
+			}
+			for _, column := range tc.deprecated {
+				assert.NotContains(t, columns, column)
+			}
+		})
+	}
+}
+
+type schemaQueryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+func tableColumnNames(t *testing.T, database schemaQueryer, table string) []string {
+	t.Helper()
+	rows, err := database.Query("SELECT name FROM pragma_table_info(?)", table)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		columns = append(columns, column)
+	}
+	require.NoError(t, rows.Err())
+	return columns
+}
 
 func TestAgentContentStoreDualWritesExactSharedBodies(t *testing.T) {
 	database := testDB(t)
