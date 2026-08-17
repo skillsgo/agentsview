@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/skillsgo/agentsview/internal/parser"
 )
 
@@ -2583,16 +2584,17 @@ func applyToolCallSubagentLinkTx(
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string
 	var currentResultContentLen int
+	var currentResultObjectID sql.NullInt64
 	if err := tx.QueryRow(
 		`SELECT tool_name, category, COALESCE(subagent_session_id, ''),
 		        COALESCE(result_content_length, 0),
-		        COALESCE(result_content, '')
+		        result_object_id
 		 FROM tool_calls
 		 WHERE session_id = ? AND tool_use_id = ?`,
 		sessionID, link.ToolUseID,
 	).Scan(
 		&toolName, &category, &currentSubagent,
-		&currentResultContentLen, &currentResultContent,
+		&currentResultContentLen, &currentResultObjectID,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -2601,6 +2603,17 @@ func applyToolCallSubagentLinkTx(
 			"checking tool_call for %s/%s: %w",
 			sessionID, link.ToolUseID, err,
 		)
+	}
+	if currentResultObjectID.Valid {
+		var err error
+		currentResultContent, err = readAgentContent(
+			context.Background(), func(query string, args ...any) rowScanner {
+				return tx.QueryRow(query, args...)
+			}, currentResultObjectID.Int64,
+		)
+		if err != nil {
+			return false, err
+		}
 	}
 	storedSubagent := currentSubagent
 	if currentSubagent == "" &&
@@ -2628,12 +2641,24 @@ func applyToolCallSubagentLinkTx(
 		currentResultContent == resultContent {
 		return false, nil
 	}
-	_, err := tx.Exec(
+	encoder, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+		zstd.WithEncoderConcurrency(1),
+	)
+	if err != nil {
+		return false, fmt.Errorf("creating Agent content encoder: %w", err)
+	}
+	defer encoder.Close()
+	resultObjectID, err := putAgentContentTx(tx, encoder, resultContent)
+	if err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(
 		`UPDATE tool_calls
 		 SET subagent_session_id = ?, result_content_length = ?,
-		     result_content = ?
+		     result_content = ?, result_object_id = ?
 		 WHERE session_id = ? AND tool_use_id = ?`,
-		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
+		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent, resultObjectID,
 		sessionID, link.ToolUseID,
 	)
 	return err == nil, err
