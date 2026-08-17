@@ -35,10 +35,8 @@ type ArtifactExportData struct {
 
 const artifactMessageRawBytesSQL = `
 	length(CAST(role AS BLOB)) +
-	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id),
-		length(CAST(content AS BLOB))) +
-	COALESCE((SELECT raw_size FROM content_objects WHERE id = thinking_object_id),
-		length(CAST(thinking_text AS BLOB))) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id), 0) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = thinking_object_id), 0) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB)) +
 	length(CAST(model AS BLOB)) +
 	length(CAST(token_usage AS BLOB)) +
@@ -54,11 +52,9 @@ const artifactToolCallRawBytesSQL = `
 	length(CAST(tool_name AS BLOB)) +
 	length(CAST(category AS BLOB)) +
 	length(CAST(COALESCE(tool_use_id, '') AS BLOB)) +
-	COALESCE((SELECT raw_size FROM content_objects WHERE id = input_object_id),
-		length(CAST(COALESCE(input_json, '') AS BLOB))) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = input_object_id), 0) +
 	length(CAST(COALESCE(skill_name, '') AS BLOB)) +
-	COALESCE((SELECT raw_size FROM content_objects WHERE id = result_object_id),
-		length(CAST(COALESCE(result_content, '') AS BLOB))) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = result_object_id), 0) +
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +
 	length(CAST(COALESCE(file_path, '') AS BLOB))`
 
@@ -68,8 +64,7 @@ const artifactResultEventRawBytesSQL = `
 	length(CAST(COALESCE(subagent_session_id, '') AS BLOB)) +
 	length(CAST(source AS BLOB)) +
 	length(CAST(status AS BLOB)) +
-	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id),
-		length(CAST(content AS BLOB))) +
+	COALESCE((SELECT raw_size FROM content_objects WHERE id = content_object_id), 0) +
 	length(CAST(COALESCE(timestamp, '') AS BLOB))`
 
 const artifactUsageRawBytesSQL = `
@@ -179,8 +174,8 @@ func attachArtifactNestedCollectionsTx(
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, message_id, session_id, tool_name, category,
-			tool_use_id, input_json, input_object_id, skill_name,
-			result_content_length, result_content, result_object_id,
+			tool_use_id, input_object_id, skill_name,
+			result_content_length, result_object_id,
 			subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
@@ -192,17 +187,17 @@ func attachArtifactNestedCollectionsTx(
 	toolCalls := make([]toolCallRow, 0)
 	for rows.Next() {
 		var row toolCallRow
-		var toolUseID, inputJSON, skillName sql.NullString
+		var toolUseID, skillName sql.NullString
 		var inputObjectID, resultObjectID sql.NullInt64
-		var subagentSessionID, resultContent sql.NullString
+		var subagentSessionID sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
 		var callIndex sql.NullInt64
 		if err := rows.Scan(
 			&row.rowID, &row.call.MessageID, &row.call.SessionID,
 			&row.call.ToolName, &row.call.Category,
-			&toolUseID, &inputJSON, &inputObjectID, &skillName,
-			&resultLen, &resultContent, &resultObjectID,
+			&toolUseID, &inputObjectID, &skillName,
+			&resultLen, &resultObjectID,
 			&subagentSessionID,
 			&filePath, &callIndex,
 		); err != nil {
@@ -212,9 +207,6 @@ func attachArtifactNestedCollectionsTx(
 		if toolUseID.Valid {
 			row.call.ToolUseID = toolUseID.String
 		}
-		if inputJSON.Valid {
-			row.call.InputJSON = inputJSON.String
-		}
 		if inputObjectID.Valid {
 			row.call.inputObjectID = &inputObjectID.Int64
 		}
@@ -223,9 +215,6 @@ func attachArtifactNestedCollectionsTx(
 		}
 		if resultLen.Valid {
 			row.call.ResultContentLength = int(resultLen.Int64)
-		}
-		if resultContent.Valid {
-			row.call.ResultContent = resultContent.String
 		}
 		if resultObjectID.Valid {
 			row.call.resultObjectID = &resultObjectID.Int64
@@ -303,7 +292,7 @@ func attachArtifactNestedCollectionsTx(
 	rows, err = tx.QueryContext(ctx, `
 		SELECT id, tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_object_id, content_length,
+			source, status, content_object_id, content_length,
 			timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ?
@@ -318,8 +307,7 @@ func attachArtifactNestedCollectionsTx(
 		if err := rows.Scan(
 			&row.rowID, &row.messageOrdinal, &row.callIndex,
 			&toolUseID, &agentID, &subagentSessionID,
-			&row.event.Source, &row.event.Status, &row.event.Content,
-			&row.event.contentObjectID,
+			&row.event.Source, &row.event.Status, &row.event.contentObjectID,
 			&row.event.ContentLength, &timestamp, &row.event.EventIndex,
 		); err != nil {
 			_ = rows.Close()

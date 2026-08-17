@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -4276,7 +4277,7 @@ func (db *DB) populateFrustrationMarkers(
 	}
 	return queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
-		q := `SELECT session_id, ordinal, content, is_system
+		q := `SELECT session_id, ordinal, content_object_id, is_system
 			FROM messages
 			WHERE role = 'user' AND session_id IN ` + ph
 		msgRows, err := db.getReader().QueryContext(ctx, q, args...)
@@ -4285,30 +4286,51 @@ func (db *DB) populateFrustrationMarkers(
 				"querying frustration markers: %w", err,
 			)
 		}
-		defer msgRows.Close()
+		type markerRow struct {
+			sessionID string
+			ordinal   int
+			objectID  sql.NullInt64
+			isSystem  bool
+		}
+		var markers []markerRow
+		var objectIDs []int64
 		for msgRows.Next() {
-			var sessionID, content string
-			var ordinal int
-			var isSystem bool
+			var marker markerRow
 			if err := msgRows.Scan(
-				&sessionID, &ordinal, &content, &isSystem,
+				&marker.sessionID, &marker.ordinal,
+				&marker.objectID, &marker.isSystem,
 			); err != nil {
+				_ = msgRows.Close()
 				return fmt.Errorf(
 					"scanning frustration marker: %w", err,
 				)
 			}
-			i, ok := idx[sessionID]
-			if !ok || isSystem {
-				continue
-			}
-			if signals.IsFrustrationMarker(content) {
-				rows[i].FrustrationMarkerCount++
+			markers = append(markers, marker)
+			if marker.objectID.Valid {
+				objectIDs = append(objectIDs, marker.objectID.Int64)
 			}
 		}
 		if err := msgRows.Err(); err != nil {
+			_ = msgRows.Close()
 			return fmt.Errorf(
 				"iterating frustration markers: %w", err,
 			)
+		}
+		if err := msgRows.Close(); err != nil {
+			return fmt.Errorf("closing frustration markers: %w", err)
+		}
+		contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+		if err != nil {
+			return err
+		}
+		for _, marker := range markers {
+			i, ok := idx[marker.sessionID]
+			if !ok || marker.isSystem || !marker.objectID.Valid {
+				continue
+			}
+			if signals.IsFrustrationMarker(contents[marker.objectID.Int64]) {
+				rows[i].FrustrationMarkerCount++
+			}
 		}
 		return nil
 	})
@@ -4413,7 +4435,7 @@ func (db *DB) signalMessages(
 	filterModels := csvFilterValues(f.Model)
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
-		q := `SELECT session_id, ordinal, role, content,
+		q := `SELECT session_id, ordinal, role, content_object_id,
 					COALESCE(timestamp, ''), is_system, has_tool_use
 				FROM messages
 				WHERE session_id IN ` + ph
@@ -4433,23 +4455,48 @@ func (db *DB) signalMessages(
 				"querying signal messages: %w", err,
 			)
 		}
-		defer msgRows.Close()
+		type storedSignalMessage struct {
+			message  SignalMessage
+			objectID sql.NullInt64
+		}
+		var stored []storedSignalMessage
+		var objectIDs []int64
 		for msgRows.Next() {
-			var m SignalMessage
+			var row storedSignalMessage
 			if err := msgRows.Scan(
-				&m.SessionID, &m.Ordinal, &m.Role,
-				&m.Content, &m.Timestamp,
-				&m.IsSystem, &m.HasToolUse,
+				&row.message.SessionID, &row.message.Ordinal,
+				&row.message.Role, &row.objectID, &row.message.Timestamp,
+				&row.message.IsSystem, &row.message.HasToolUse,
 			); err != nil {
+				_ = msgRows.Close()
 				return fmt.Errorf(
 					"scanning signal message: %w", err,
 				)
 			}
-			out[m.SessionID] = append(out[m.SessionID], m)
+			stored = append(stored, row)
+			if row.objectID.Valid {
+				objectIDs = append(objectIDs, row.objectID.Int64)
+			}
 		}
 		if err := msgRows.Err(); err != nil {
+			_ = msgRows.Close()
 			return fmt.Errorf(
 				"iterating signal messages: %w", err,
+			)
+		}
+		if err := msgRows.Close(); err != nil {
+			return fmt.Errorf("closing signal messages: %w", err)
+		}
+		contents, err := loadAgentContents(ctx, db.getReader(), objectIDs)
+		if err != nil {
+			return err
+		}
+		for _, row := range stored {
+			if row.objectID.Valid {
+				row.message.Content = contents[row.objectID.Int64]
+			}
+			out[row.message.SessionID] = append(
+				out[row.message.SessionID], row.message,
 			)
 		}
 		return nil
