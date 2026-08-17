@@ -185,7 +185,7 @@ func (db *DB) SearchContent(
 	}
 
 	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		f.Sources = []string{"messages", "tool_input"}
 	}
 	for _, s := range f.Sources {
 		if s != "messages" && s != "tool_input" && s != "tool_result" {
@@ -215,168 +215,167 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if !db.hasContentFTS() {
-		return db.searchContentObjects(ctx, f, nil)
-	}
-	scope, scopeArgs := sessionScopeSubquery(f)
-	like := "%" + escapeLike(f.Pattern) + "%"
+	return db.searchContentObjects(ctx, f, nil)
+	/*
+			scope, scopeArgs := sessionScopeSubquery(f)
+			like := "%" + escapeLike(f.Pattern) + "%"
 
-	var branches []string
-	var args []any
-	messageContent := "message_content.content"
-	messageJoin := "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
-	inputContent := "input_content.content"
-	inputJoin := "JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
-	resultContent := "result_content.content"
-	resultJoin := "JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
-	eventContent := "event_content.content"
-	eventJoin := "JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
+			var branches []string
+			var args []any
+			messageContent := "message_content.content"
+			messageJoin := "JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+			inputContent := "input_content.content"
+			inputJoin := "JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
+			resultContent := "result_content.content"
+			resultJoin := "JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+			eventContent := "event_content.content"
+			eventJoin := "JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
 
-	// The snippet column carries the full source field; the snippet is built in
-	// Go (substringSnippet) so secret redaction sees whole secrets, not a window
-	// pre-truncated in SQL that could split a secret and leak a fragment. Only
-	// the Limit+1 returned rows ship a full body.
-	snippetExpr := func(col string) string { return col }
+			// The snippet column carries the full source field; the snippet is built in
+			// Go (substringSnippet) so secret redaction sees whole secrets, not a window
+			// pre-truncated in SQL that could split a secret and leak a fragment. Only
+			// the Limit+1 returned rows ship a full body.
+			snippetExpr := func(col string) string { return col }
 
-	if hasSource(f, "messages") {
-		sysPred := "1=1"
-		if f.ExcludeSystem {
-			sysPred = "m.is_system = 0 AND " +
-				SystemPrefixSQL(messageContent, "m.role")
+			if hasSource(f, "messages") {
+				sysPred := "1=1"
+				if f.ExcludeSystem {
+					sysPred = "m.is_system = 0 AND " +
+						SystemPrefixSQL(messageContent, "m.role")
+				}
+				branches = append(branches, fmt.Sprintf(`
+					SELECT m.session_id, s.project, s.agent, 'message' AS location,
+						m.role AS role, '' AS tool_name, m.ordinal,
+						COALESCE(m.timestamp,'') AS ts, %s AS snippet,
+						COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+						0 AS src, m.id AS row_id
+					FROM messages m JOIN sessions s ON s.id = m.session_id
+					%s
+					WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
+					snippetExpr(messageContent), messageJoin, messageContent, sysPred, scope))
+				args = append(args, like)
+				args = append(args, scopeArgs...)
+			}
+			if hasSource(f, "tool_input") {
+				branches = append(branches, fmt.Sprintf(`
+					SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
+						'assistant' AS role, tc.tool_name, mm.ordinal,
+						COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
+						COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+						1 AS src, tc.id AS row_id
+					FROM tool_calls tc
+					JOIN messages mm ON mm.id = tc.message_id
+					JOIN sessions s ON s.id = tc.session_id
+					%s
+					WHERE %s LIKE ? ESCAPE '\' AND tc.%s`,
+					snippetExpr(inputContent), inputJoin, inputContent, scope))
+				args = append(args, like)
+				args = append(args, scopeArgs...)
+			}
+			if hasSource(f, "tool_result") {
+				// Canonical output: result_content only when the call has no result
+				// events (those are matched in the events branch below). The dedup is
+				// keyed on tool_use_id and applied only when that ID is non-empty: many
+				// agents leave tool_use_id blank, and matching '' = '' would let one
+				// empty-ID result event suppress the result_content of every other
+				// empty-ID call in the session. Empty-ID calls therefore skip the dedup
+				// -- they may surface in both branches (a harmless duplicate) but are
+				// never missed. A precise per-call key would need a call_index on
+				// tool_calls, which SQLite does not store.
+				branches = append(branches, fmt.Sprintf(`
+					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
+						'assistant' AS role, tc.tool_name, mm.ordinal,
+						COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
+						COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+						2 AS src, tc.id AS row_id
+					FROM tool_calls tc
+					JOIN messages mm ON mm.id = tc.message_id
+					JOIN sessions s ON s.id = tc.session_id
+					%s
+					WHERE %s LIKE ? ESCAPE '\'
+					  AND NOT EXISTS (SELECT 1 FROM tool_result_events tre
+					    WHERE tre.session_id = tc.session_id
+					      AND tre.tool_use_id = tc.tool_use_id
+					      AND tc.tool_use_id <> '')
+					  AND tc.%s`,
+					snippetExpr(resultContent), resultJoin, resultContent, scope))
+				args = append(args, like)
+				args = append(args, scopeArgs...)
+				branches = append(branches, fmt.Sprintf(`
+					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
+						'assistant' AS role, '' AS tool_name,
+						tre.tool_call_message_ordinal AS ordinal,
+						COALESCE(tre.timestamp,'') AS ts, %s AS snippet,
+						COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+						3 AS src, tre.id AS row_id
+					FROM tool_result_events tre
+					JOIN sessions s ON s.id = tre.session_id
+					%s
+					WHERE %s LIKE ? ESCAPE '\' AND tre.%s`,
+					snippetExpr(eventContent), eventJoin, eventContent, scope))
+				args = append(args, like)
+				args = append(args, scopeArgs...)
+			}
+			if len(branches) == 0 {
+				return ContentSearchPage{}, nil
+			}
+
+			query := "SELECT session_id, project, agent, location, role, tool_name, " +
+				"ordinal, ts, snippet FROM (" +
+				strings.Join(branches, " UNION ALL ") +
+				") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
+				"LIMIT ? OFFSET ?"
+			args = append(args, f.Limit+1, f.Cursor)
+
+			return db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.substringSnippet)
 		}
-		branches = append(branches, fmt.Sprintf(`
-			SELECT m.session_id, s.project, s.agent, 'message' AS location,
-				m.role AS role, '' AS tool_name, m.ordinal,
-				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
-				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
-				0 AS src, m.id AS row_id
-			FROM messages m JOIN sessions s ON s.id = m.session_id
-			%s
-			WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
-			snippetExpr(messageContent), messageJoin, messageContent, sysPred, scope))
-		args = append(args, like)
-		args = append(args, scopeArgs...)
-	}
-	if hasSource(f, "tool_input") {
-		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
-				'assistant' AS role, tc.tool_name, mm.ordinal,
-				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
-				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
-				1 AS src, tc.id AS row_id
-			FROM tool_calls tc
-			JOIN messages mm ON mm.id = tc.message_id
-			JOIN sessions s ON s.id = tc.session_id
-			%s
-			WHERE %s LIKE ? ESCAPE '\' AND tc.%s`,
-			snippetExpr(inputContent), inputJoin, inputContent, scope))
-		args = append(args, like)
-		args = append(args, scopeArgs...)
-	}
-	if hasSource(f, "tool_result") {
-		// Canonical output: result_content only when the call has no result
-		// events (those are matched in the events branch below). The dedup is
-		// keyed on tool_use_id and applied only when that ID is non-empty: many
-		// agents leave tool_use_id blank, and matching '' = '' would let one
-		// empty-ID result event suppress the result_content of every other
-		// empty-ID call in the session. Empty-ID calls therefore skip the dedup
-		// -- they may surface in both branches (a harmless duplicate) but are
-		// never missed. A precise per-call key would need a call_index on
-		// tool_calls, which SQLite does not store.
-		branches = append(branches, fmt.Sprintf(`
-			SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
-				'assistant' AS role, tc.tool_name, mm.ordinal,
-				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
-				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
-				2 AS src, tc.id AS row_id
-			FROM tool_calls tc
-			JOIN messages mm ON mm.id = tc.message_id
-			JOIN sessions s ON s.id = tc.session_id
-			%s
-			WHERE %s LIKE ? ESCAPE '\'
-			  AND NOT EXISTS (SELECT 1 FROM tool_result_events tre
-			    WHERE tre.session_id = tc.session_id
-			      AND tre.tool_use_id = tc.tool_use_id
-			      AND tc.tool_use_id <> '')
-			  AND tc.%s`,
-			snippetExpr(resultContent), resultJoin, resultContent, scope))
-		args = append(args, like)
-		args = append(args, scopeArgs...)
-		branches = append(branches, fmt.Sprintf(`
-			SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
-				'assistant' AS role, '' AS tool_name,
-				tre.tool_call_message_ordinal AS ordinal,
-				COALESCE(tre.timestamp,'') AS ts, %s AS snippet,
-				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
-				3 AS src, tre.id AS row_id
-			FROM tool_result_events tre
-			JOIN sessions s ON s.id = tre.session_id
-			%s
-			WHERE %s LIKE ? ESCAPE '\' AND tre.%s`,
-			snippetExpr(eventContent), eventJoin, eventContent, scope))
-		args = append(args, like)
-		args = append(args, scopeArgs...)
-	}
-	if len(branches) == 0 {
-		return ContentSearchPage{}, nil
-	}
 
-	query := "SELECT session_id, project, agent, location, role, tool_name, " +
-		"ordinal, ts, snippet FROM (" +
-		strings.Join(branches, " UNION ALL ") +
-		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
-		"LIMIT ? OFFSET ?"
-	args = append(args, f.Limit+1, f.Cursor)
-
-	return db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.substringSnippet)
-}
-
-// scanContentMatches runs query and assembles a ContentSearchPage, treating
-// the (Limit+1)-th row as the cursor sentinel. The body column is the full
-// source field; makeSnippet derives the (windowed, redacted) snippet from it
-// so redaction sees whole secrets rather than a pre-truncated window. The
-// returned page then gets its derived unit ranges and lineage assigned by
-// the shared deriveLexicalUnits pass (post-truncation, O(page)).
-func (db *DB) scanContentMatches(
-	ctx context.Context, query string, args []any, limit, cursor int,
-	makeSnippet func(body string) string,
-) (ContentSearchPage, error) {
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return ContentSearchPage{}, fmt.Errorf("content search: %w", err)
-	}
-	defer rows.Close()
-	out := make([]ContentMatch, 0)
-	for rows.Next() {
-		var m ContentMatch
-		var body string
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body); err != nil {
-			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
-		}
-		m.Snippet = makeSnippet(body)
-		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
-		return ContentSearchPage{}, err
-	}
-	// Close the cursor before deriving units (exhausting Next already
-	// auto-closed it; this keeps the release explicit): deriveLexicalUnits
-	// issues new queries, which must never wait on a connection this cursor
-	// would otherwise still pin.
-	if err := rows.Close(); err != nil {
-		return ContentSearchPage{}, fmt.Errorf("closing content matches: %w", err)
-	}
-	page := ContentSearchPage{Matches: out}
-	if len(out) > limit {
-		page.Matches = out[:limit]
-		page.NextCursor = cursor + limit
-	}
-	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
-		return ContentSearchPage{}, err
-	}
-	return page, nil
+		// scanContentMatches runs query and assembles a ContentSearchPage, treating
+		// the (Limit+1)-th row as the cursor sentinel. The body column is the full
+		// source field; makeSnippet derives the (windowed, redacted) snippet from it
+		// so redaction sees whole secrets rather than a pre-truncated window. The
+		// returned page then gets its derived unit ranges and lineage assigned by
+		// the shared deriveLexicalUnits pass (post-truncation, O(page)).
+		func (db *DB) scanContentMatches(
+			ctx context.Context, query string, args []any, limit, cursor int,
+			makeSnippet func(body string) string,
+		) (ContentSearchPage, error) {
+			rows, err := db.getReader().QueryContext(ctx, query, args...)
+			if err != nil {
+				return ContentSearchPage{}, fmt.Errorf("content search: %w", err)
+			}
+			defer rows.Close()
+			out := make([]ContentMatch, 0)
+			for rows.Next() {
+				var m ContentMatch
+				var body string
+				if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+					&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
+					&m.Timestamp, &body); err != nil {
+					return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
+				}
+				m.Snippet = makeSnippet(body)
+				out = append(out, m)
+			}
+			if err := rows.Err(); err != nil {
+				return ContentSearchPage{}, err
+			}
+			// Close the cursor before deriving units (exhausting Next already
+			// auto-closed it; this keeps the release explicit): deriveLexicalUnits
+			// issues new queries, which must never wait on a connection this cursor
+			// would otherwise still pin.
+			if err := rows.Close(); err != nil {
+				return ContentSearchPage{}, fmt.Errorf("closing content matches: %w", err)
+			}
+			page := ContentSearchPage{Matches: out}
+			if len(out) > limit {
+				page.Matches = out[:limit]
+				page.NextCursor = cursor + limit
+			}
+			if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+				return ContentSearchPage{}, err
+			}
+			return page, nil*/
 }
 
 // searchContentRegex compiles the pattern, narrows candidate rows with a
@@ -389,64 +388,63 @@ func (db *DB) searchContentRegex(
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
-	if !db.hasContentFTS() {
-		return db.searchContentObjects(ctx, f, re)
-	}
-	lit := literalPrefix(f.Pattern)
+	return db.searchContentObjects(ctx, f, re)
+	/*
+		lit := literalPrefix(f.Pattern)
 
-	rows, err := db.regexCandidateRows(ctx, f, lit)
-	if err != nil {
-		return ContentSearchPage{}, err
-	}
-	defer rows.Close()
+		rows, err := db.regexCandidateRows(ctx, f, lit)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer rows.Close()
 
-	out := make([]ContentMatch, 0)
-	// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
-	// candidates from the start, discarding the first f.Cursor confirmed
-	// matches. Ordering is deterministic so paging stays correct; deep pages
-	// cost O(cursor) extra RE2 work, acceptable for interactive use.
-	seen := 0
-	for rows.Next() {
-		var m ContentMatch
-		var body string
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body); err != nil {
-			return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
+		out := make([]ContentMatch, 0)
+		// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
+		// candidates from the start, discarding the first f.Cursor confirmed
+		// matches. Ordering is deterministic so paging stays correct; deep pages
+		// cost O(cursor) extra RE2 work, acceptable for interactive use.
+		seen := 0
+		for rows.Next() {
+			var m ContentMatch
+			var body string
+			if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+				&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
+				&m.Timestamp, &body); err != nil {
+				return ContentSearchPage{}, fmt.Errorf("scan candidate: %w", err)
+			}
+			loc := re.FindStringIndex(body)
+			if loc == nil {
+				continue
+			}
+			if seen < f.Cursor {
+				seen++
+				continue
+			}
+			m.Snippet = f.buildSnippet(body, loc[0], loc[1])
+			out = append(out, m)
+			if len(out) > f.Limit {
+				break
+			}
 		}
-		loc := re.FindStringIndex(body)
-		if loc == nil {
-			continue
+		if err := rows.Err(); err != nil {
+			return ContentSearchPage{}, err
 		}
-		if seen < f.Cursor {
-			seen++
-			continue
+		// Close the candidate cursor before deriving units: the loop breaks out
+		// with rows still open once Limit+1 matches are collected, and
+		// deriveLexicalUnits issues new queries that could otherwise block on a
+		// constrained connection pool while this cursor pins a connection.
+		if err := rows.Close(); err != nil {
+			return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
 		}
-		m.Snippet = f.buildSnippet(body, loc[0], loc[1])
-		out = append(out, m)
+		page := ContentSearchPage{Matches: out}
 		if len(out) > f.Limit {
-			break
+			page.Matches = out[:f.Limit]
+			page.NextCursor = f.Cursor + f.Limit
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return ContentSearchPage{}, err
-	}
-	// Close the candidate cursor before deriving units: the loop breaks out
-	// with rows still open once Limit+1 matches are collected, and
-	// deriveLexicalUnits issues new queries that could otherwise block on a
-	// constrained connection pool while this cursor pins a connection.
-	if err := rows.Close(); err != nil {
-		return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
-	}
-	page := ContentSearchPage{Matches: out}
-	if len(out) > f.Limit {
-		page.Matches = out[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
-	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
-		return ContentSearchPage{}, err
-	}
-	return page, nil
+		if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+			return ContentSearchPage{}, err
+		}
+		return page, nil*/
 }
 
 type contentObjectCandidate struct {
@@ -814,16 +812,15 @@ func (db *DB) searchContentFTS(
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = 0 AND " +
-			SystemPrefixSQL("content_fts.content", "m.role")
+		sysPred = "m.is_system = 0 AND m.role IN ('user', 'assistant')"
 	}
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts,
-			content_fts.content AS snippet
-		FROM content_fts
+			content_fts.rowid AS content_object_id
+		FROM search_index.content_fts
 		JOIN messages m ON m.content_object_id = content_fts.rowid
 		JOIN sessions s ON s.id = m.session_id
 		WHERE content_fts MATCH ? AND %s AND m.%s
@@ -832,9 +829,40 @@ func (db *DB) searchContentFTS(
 	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
 	args = append(args, f.Limit+1, f.Cursor)
-	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.ftsSnippet)
+	rows, err := db.getSearchReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return ContentSearchPage{}, classifyFTSError(err)
+	}
+	defer rows.Close()
+	var matches []ContentMatch
+	for rows.Next() {
+		var match ContentMatch
+		var objectID int64
+		if err := rows.Scan(&match.SessionID, &match.Project, &match.Agent,
+			&match.Location, &match.Role, &match.ToolName, &match.Ordinal,
+			&match.Timestamp, &objectID); err != nil {
+			return ContentSearchPage{}, fmt.Errorf("scan FTS match: %w", err)
+		}
+		body, err := readAgentContent(ctx,
+			func(query string, args ...any) rowScanner {
+				return db.getReader().QueryRowContext(ctx, query, args...)
+			}, objectID)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		match.Snippet = f.ftsSnippet(body)
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		return ContentSearchPage{}, classifyFTSError(err)
+	}
+	page := ContentSearchPage{Matches: matches}
+	if len(matches) > f.Limit {
+		page.Matches = matches[:f.Limit]
+		page.NextCursor = f.Cursor + f.Limit
+	}
+	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
+		return ContentSearchPage{}, err
 	}
 	return page, nil
 }
@@ -1296,21 +1324,20 @@ func (db *DB) fetchHybridFTSBatch(
 ) ([]hybridDisplay, error) {
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
-		SELECT m.session_id, m.ordinal,
-		       snippet(content_fts, 0, '', '', '...', 32) AS snip
-		FROM content_fts JOIN messages m
+		SELECT m.session_id, m.ordinal, content_fts.rowid
+		FROM search_index.content_fts JOIN messages m
 		  ON m.content_object_id = content_fts.rowid
 		WHERE content_fts MATCH ? AND m.role IN ('user','assistant')
-		  AND m.is_system = 0 AND %s
+		  AND m.is_system = 0
 		  AND m.%s
 		ORDER BY content_fts.rank, m.id LIMIT ? OFFSET ?`,
-		SystemPrefixSQL("content_fts.content", "m.role"), scope)
+		scope)
 
 	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := db.getSearchReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
 	}
@@ -1319,9 +1346,18 @@ func (db *DB) fetchHybridFTSBatch(
 	var hits []hybridDisplay
 	for rows.Next() {
 		var hit hybridDisplay
-		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.snippet); err != nil {
+		var objectID int64
+		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &objectID); err != nil {
 			return nil, fmt.Errorf("scan hybrid fts hit: %w", err)
 		}
+		body, err := readAgentContent(ctx,
+			func(query string, args ...any) rowScanner {
+				return db.getReader().QueryRowContext(ctx, query, args...)
+			}, objectID)
+		if err != nil {
+			return nil, err
+		}
+		hit.snippet = f.ftsSnippet(body)
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {

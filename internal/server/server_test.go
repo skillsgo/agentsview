@@ -2334,7 +2334,7 @@ func TestSearch_NotAvailable(t *testing.T) {
 	// Simulate missing FTS by dropping the virtual table.
 	// HasFTS() will return false because the content projection is absent.
 	err := te.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DROP TABLE IF EXISTS content_fts")
+		_, err := tx.Exec("DROP TABLE IF EXISTS search_index.content_fts")
 		return err
 	})
 	if err != nil {

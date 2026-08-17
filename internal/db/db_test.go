@@ -4003,9 +4003,9 @@ func TestFTSBackfill(t *testing.T) {
 	requireNoError(t, err, "Open 1")
 	// Use writer directly to ensure it happens
 	w := d1.getWriter()
-	_, err = w.Exec("DROP TRIGGER IF EXISTS content_objects_ad")
+	_, err = w.Exec("DROP TRIGGER IF EXISTS content_objects_search_ad")
 	require.NoError(t, err, "dropping content cleanup trigger")
-	_, err = w.Exec("DROP TABLE IF EXISTS content_fts")
+	_, err = w.Exec("DROP TABLE IF EXISTS search_index.content_fts")
 	require.NoError(t, err, "dropping fts")
 
 	// 2. Insert messages while FTS is missing
@@ -4340,19 +4340,19 @@ func TestRepeatedReopenBoundsRetiredPools(t *testing.T) {
 
 	// Reopen many times; retired pools from earlier rounds
 	// should be closed by subsequent reopens, keeping only
-	// the most recent pair alive.
+	// the most recent writer, archive reader, and search reader alive.
 	for range 20 {
 		err := d.Reopen()
 		require.NoError(t, err, "Reopen")
 	}
 
 	// After 20 reopens the retired slice should hold at most
-	// the last pair (2 entries), not 40.
+	// the last connection set (3 entries), not 60.
 	d.mu.Lock()
 	n := len(d.retired)
 	d.mu.Unlock()
-	assert.LessOrEqual(t, n, 2,
-		"retired pool count = %d, want <= 2", n)
+	assert.LessOrEqual(t, n, 3,
+		"retired pool count = %d, want <= 3", n)
 
 	// Data should still be readable.
 	s, err := d.GetSession(context.Background(), "s1")

@@ -93,11 +93,11 @@ func TestAgentContentStoreDualWritesExactSharedBodies(t *testing.T) {
 	assert.Equal(t, 4, objects)
 	if database.HasFTS() {
 		var projected int
-		require.NoError(t, database.getReader().QueryRow(
-			"SELECT count(*) FROM content_fts",
+		require.NoError(t, database.getSearchReader().QueryRow(
+			"SELECT count(*) FROM search_index.content_fts",
 		).Scan(&projected))
-		assert.Equal(t, objects, projected,
-			"each unique object should have one search projection")
+		assert.Equal(t, 2, projected,
+			"messages and tool inputs should be searchable; thinking and tool results should not")
 	}
 
 	var firstMessageID, secondMessageID int64
@@ -181,8 +181,8 @@ func TestAgentContentStoreReclaimsOnlyUnreferencedBodies(t *testing.T) {
 	assert.Zero(t, objects)
 	if database.hasContentFTS() {
 		var projected int
-		require.NoError(t, database.getReader().QueryRow(
-			"SELECT count(*) FROM content_fts WHERE rowid = ?", objectID,
+		require.NoError(t, database.getSearchReader().QueryRow(
+			"SELECT count(*) FROM search_index.content_fts WHERE rowid = ?", objectID,
 		).Scan(&projected))
 		assert.Zero(t, projected)
 	}

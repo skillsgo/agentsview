@@ -479,15 +479,18 @@ const ClassifierHashKey = "is_automated_classifier_hash"
 var schemaSQL string
 
 const schemaFTS = `
-CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS search_index.content_fts USING fts5(
     content,
+    content='',
+    contentless_delete=1,
+    detail=full,
+    columnsize=1,
     tokenize='porter unicode61'
 );
-
-CREATE TRIGGER IF NOT EXISTS content_objects_ad AFTER DELETE ON content_objects BEGIN
+CREATE TEMP TRIGGER IF NOT EXISTS content_objects_search_ad
+AFTER DELETE ON main.content_objects BEGIN
     DELETE FROM content_fts WHERE rowid = old.id;
 END;
-
 `
 
 const recallEntriesFTS = `
@@ -587,12 +590,14 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path    string
-	writer  atomic.Pointer[sql.DB]
-	reader  atomic.Pointer[sql.DB]
-	mu      sync.Mutex // serializes writes
-	connMu  sync.RWMutex
-	retired []*sql.DB // old pools kept open for in-flight reads
+	path         string
+	searchPath   string
+	writer       atomic.Pointer[sql.DB]
+	reader       atomic.Pointer[sql.DB]
+	searchReader atomic.Pointer[sql.DB]
+	mu           sync.Mutex // serializes writes
+	connMu       sync.RWMutex
+	retired      []*sql.DB // old pools kept open for in-flight reads
 	// undrainedPools holds closed pools whose connections had not drained
 	// when CloseWriter or CloseConnections gave up. They must drain before
 	// a later close reports success, or write ownership could be released
@@ -832,6 +837,8 @@ func (w *writerHandle) Close() error {
 // getReader returns a guarded facade for the current read-only connection pool.
 func (db *DB) getReader() *readerHandle { return &readerHandle{owner: db} }
 
+func (db *DB) getSearchReader() *sql.DB { return db.searchReader.Load() }
+
 func (db *DB) rawReader() *sql.DB { return db.reader.Load() }
 
 func (db *DB) rawWriter() *sql.DB { return db.writer.Load() }
@@ -960,6 +967,10 @@ func Open(path string) (*DB, error) {
 	if err := d.migrateColumns(); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrating columns: %w", err)
+	}
+	if err := d.ensureContentSearchProjection(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initializing content search projection: %w", err)
 	}
 	if _, err := d.GetOrCreateDatabaseID(context.Background()); err != nil {
 		d.Close()
@@ -1421,8 +1432,17 @@ func OpenReadOnly(path string) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{path: path, readOnly: true}
+	searchPath := searchDatabasePath(path)
+	db := &DB{path: path, searchPath: searchPath, readOnly: true}
 	db.reader.Store(reader)
+	if _, statErr := os.Stat(searchPath); statErr == nil {
+		searchReader, openErr := openSearchReader(path, searchPath)
+		if openErr != nil {
+			reader.Close()
+			return nil, openErr
+		}
+		db.searchReader.Store(searchReader)
+	}
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
 		reader.Close()
@@ -2198,6 +2218,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"content_objects", "ref_count",
 			"ALTER TABLE content_objects ADD COLUMN ref_count INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0)",
+		},
+		{
+			"content_objects", "searchable",
+			"ALTER TABLE content_objects ADD COLUMN searchable INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1))",
 		},
 		{
 			"messages", "content_object_id",
@@ -3663,6 +3687,7 @@ func (db *DB) Vacuum() error {
 }
 
 func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
+	searchPath := searchDatabasePath(path)
 	writer, err := sql.Open(sqliteDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening writer: %w", err)
@@ -3672,6 +3697,10 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("configuring wal: %w", err)
 	}
+	if err := attachSearchWriter(writer, searchPath); err != nil {
+		writer.Close()
+		return nil, err
+	}
 
 	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
@@ -3679,15 +3708,23 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 		return nil, fmt.Errorf("opening reader: %w", err)
 	}
 	configureReaderPool(reader)
+	searchReader, err := openSearchReader(path, searchPath)
+	if err != nil {
+		writer.Close()
+		reader.Close()
+		return nil, err
+	}
 
-	db := &DB{path: path}
+	db := &DB{path: path, searchPath: searchPath}
 	db.writer.Store(writer)
 	db.reader.Store(reader)
+	db.searchReader.Store(searchReader)
 
 	db.cursorSecret = make([]byte, 32)
 	if _, err := rand.Read(db.cursorSecret); err != nil {
 		writer.Close()
 		reader.Close()
+		searchReader.Close()
 		return nil, fmt.Errorf(
 			"generating cursor secret: %w", err,
 		)
@@ -3712,6 +3749,45 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 	return db, nil
 }
 
+// searchDatabasePath gives the product archive its stable search.db name while
+// keeping rebuild/test archives isolated. Temporary archives inherit their
+// own filename prefix, so a failed rebuild can never mutate the live index.
+func searchDatabasePath(path string) string {
+	if filepath.Base(path) == "sessions.db" {
+		return filepath.Join(filepath.Dir(path), "search.db")
+	}
+	return path + ".search.db"
+}
+
+func attachSearchWriter(writer *sql.DB, searchPath string) error {
+	if _, err := writer.Exec("ATTACH DATABASE ? AS search_index", searchPath); err != nil {
+		return fmt.Errorf("attaching search database: %w", err)
+	}
+	if _, err := writer.Exec("PRAGMA search_index.journal_mode = WAL"); err != nil {
+		return fmt.Errorf("configuring search wal: %w", err)
+	}
+	return nil
+}
+
+func openSearchReader(path, searchPath string) (*sql.DB, error) {
+	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
+	if err != nil {
+		return nil, fmt.Errorf("opening search reader: %w", err)
+	}
+	reader.SetMaxOpenConns(1)
+	reader.SetMaxIdleConns(1)
+	if err := reader.Ping(); err != nil {
+		reader.Close()
+		return nil, fmt.Errorf("opening search reader: %w", err)
+	}
+	searchURI := "file:" + (&url.URL{Path: searchPath}).EscapedPath() + "?mode=ro"
+	if _, err := reader.Exec("ATTACH DATABASE ? AS search_index", searchURI); err != nil {
+		reader.Close()
+		return nil, fmt.Errorf("attaching read-only search database: %w", err)
+	}
+	return reader, nil
+}
+
 func configureWAL(conn *sql.DB) error {
 	var limit int64
 	if err := conn.QueryRow(
@@ -3732,15 +3808,17 @@ func (db *DB) CheckpointWALTruncate(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var busy, logPages, checkpointedPages int
-	err := db.getWriter().QueryRowContext(
-		ctx, "PRAGMA wal_checkpoint(TRUNCATE)",
-	).Scan(&busy, &logPages, &checkpointedPages)
-	if err != nil {
-		return fmt.Errorf("wal checkpoint truncate: %w", err)
-	}
-	if busy != 0 {
-		return ErrWALCheckpointBusy
+	for _, schema := range []string{"main", "search_index"} {
+		var busy, logPages, checkpointedPages int
+		err := db.getWriter().QueryRowContext(ctx,
+			"PRAGMA "+schema+".wal_checkpoint(TRUNCATE)",
+		).Scan(&busy, &logPages, &checkpointedPages)
+		if err != nil {
+			return fmt.Errorf("%s wal checkpoint truncate: %w", schema, err)
+		}
+		if busy != 0 {
+			return ErrWALCheckpointBusy
+		}
 	}
 	return nil
 }
@@ -3776,14 +3854,20 @@ func (db *DB) CheckpointWALTruncateWithRetry(ctx context.Context) error {
 // MaybeCheckpointLargeWAL attempts a truncate checkpoint only when the WAL file
 // has grown past the configured threshold.
 func (db *DB) MaybeCheckpointLargeWAL(ctx context.Context) (bool, error) {
-	info, err := os.Stat(db.path + "-wal")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
+	large := false
+	for _, path := range []string{db.path + "-wal", db.searchPath + "-wal"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return false, fmt.Errorf("stat wal: %w", err)
 		}
-		return false, fmt.Errorf("stat wal: %w", err)
+		if info.Size() >= walCheckpointThreshold {
+			large = true
+		}
 	}
-	if info.Size() < walCheckpointThreshold {
+	if !large {
 		return false, nil
 	}
 	return true, db.CheckpointWALTruncate(ctx)
@@ -3841,8 +3925,8 @@ func (db *DB) DropFTS() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
-		"DROP TRIGGER IF EXISTS content_objects_ad",
-		"DROP TABLE IF EXISTS content_fts",
+		"DROP TRIGGER IF EXISTS content_objects_search_ad",
+		"DROP TABLE IF EXISTS search_index.content_fts",
 	}
 	w := db.getWriter()
 	for _, s := range stmts {
@@ -3868,13 +3952,15 @@ func (db *DB) RebuildFTS() error {
 }
 
 func rebuildContentFTSLocked(w *writerHandle) error {
-	if _, err := w.Exec("DELETE FROM content_fts"); err != nil {
+	if _, err := w.Exec("DELETE FROM search_index.content_fts"); err != nil {
 		return fmt.Errorf("clearing Agent content FTS: %w", err)
 	}
 	var afterID int64
 	for {
-		rows, err := w.Query(`SELECT id, digest, raw_size, codec, payload
-			FROM content_objects WHERE id > ? ORDER BY id LIMIT 400`, afterID)
+		rows, err := w.Query(`SELECT co.id, co.digest, co.raw_size, co.codec, co.payload
+			FROM content_objects co
+			WHERE co.id > ? AND co.searchable = 1
+			ORDER BY co.id LIMIT 400`, afterID)
 		if err != nil {
 			return fmt.Errorf("querying Agent content for FTS: %w", err)
 		}
@@ -3909,14 +3995,17 @@ func rebuildContentFTSLocked(w *writerHandle) error {
 			return fmt.Errorf("closing Agent content FTS scan: %w", err)
 		}
 		if len(batch) == 0 {
-			return nil
+			_, err := w.Exec(
+				"INSERT INTO search_index.content_fts(content_fts) VALUES('optimize')",
+			)
+			return err
 		}
 		args := make([]any, 0, len(batch)*2)
 		for _, item := range batch {
 			args = append(args, item.id, item.content)
 		}
 		if _, err := w.Exec(
-			"INSERT INTO content_fts(rowid, content) VALUES "+
+			"INSERT INTO search_index.content_fts(rowid, content) VALUES "+
 				multiRowPlaceholders(len(batch), 2), args...,
 		); err != nil {
 			return fmt.Errorf("inserting Agent content FTS: %w", err)
@@ -3924,19 +4013,55 @@ func rebuildContentFTSLocked(w *writerHandle) error {
 	}
 }
 
+func (db *DB) ensureContentSearchProjection() error {
+	if !db.hasContentFTS() {
+		return nil
+	}
+	// Content objects are immutable, so equality of the desired and indexed
+	// rowid sets proves the derived index is current. A count comparison is not
+	// sufficient after an archive swap: two generations can have equal counts
+	// but different object IDs.
+	var mismatch int
+	if err := db.getSearchReader().QueryRow(`SELECT EXISTS (
+		SELECT id FROM content_objects co
+		WHERE co.searchable = 1
+		  AND NOT EXISTS (SELECT 1 FROM search_index.content_fts f
+			WHERE f.rowid = co.id)
+		UNION ALL
+		SELECT rowid FROM search_index.content_fts f
+		WHERE NOT EXISTS (SELECT 1 FROM content_objects co
+			WHERE co.id = f.rowid AND co.searchable = 1)
+		LIMIT 1
+	)`).Scan(&mismatch); err != nil {
+		return fmt.Errorf("checking Agent content search projection: %w", err)
+	}
+	if mismatch == 0 {
+		return nil
+	}
+	return db.RebuildFTS()
+}
+
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS() bool {
 	// We need to actually try to access the table, because it might exist
 	// in sqlite_master but fail to load if the fts5 module is missing
 	// in the current runtime.
-	_, err := db.getReader().Exec(
-		"SELECT 1 FROM content_fts LIMIT 1",
+	reader := db.getSearchReader()
+	if reader == nil {
+		return false
+	}
+	_, err := reader.Exec(
+		"SELECT 1 FROM search_index.content_fts LIMIT 1",
 	)
 	return err == nil
 }
 
 func (db *DB) hasContentFTS() bool {
-	_, err := db.getReader().Exec("SELECT 1 FROM content_fts LIMIT 1")
+	reader := db.getSearchReader()
+	if reader == nil {
+		return false
+	}
+	_, err := reader.Exec("SELECT 1 FROM search_index.content_fts LIMIT 1")
 	return err == nil
 }
 
@@ -3976,29 +4101,13 @@ func (db *DB) init() error {
 		return err
 	}
 
-	var contentFTSCount int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
-			" WHERE type='table' AND name='content_fts'",
-	).Scan(&contentFTSCount); err != nil {
-		return fmt.Errorf("checking Agent content FTS table: %w", err)
-	}
-	hadContentFTS := contentFTSCount > 0
-
 	// Attempt to initialize FTS. Failure is non-fatal
 	// (might be missing module).
-	ftsAvailable := true
 	if _, err := w.Exec(schemaFTS); err != nil {
 		if !strings.Contains(
 			err.Error(), "no such module",
 		) {
 			return fmt.Errorf("initializing FTS: %w", err)
-		}
-		ftsAvailable = false
-	}
-	if ftsAvailable && !hadContentFTS {
-		if err := rebuildContentFTSLocked(w); err != nil {
-			return fmt.Errorf("backfilling Agent content FTS: %w", err)
 		}
 	}
 
@@ -4100,6 +4209,7 @@ func (db *DB) Close() error {
 	db.connMu.Lock()
 	w := db.rawWriter()
 	r := db.rawReader()
+	sr := db.searchReader.Swap(nil)
 	retired := db.retired
 	db.retired = nil
 	undrained := db.undrainedPools
@@ -4111,7 +4221,7 @@ func (db *DB) Close() error {
 	// the final connection closes, and the reader pool is mode=ro so its
 	// close cannot perform that checkpoint.
 	var errs []error
-	closed := make([]*sql.DB, 0, len(retired)+len(undrained)+2)
+	closed := make([]*sql.DB, 0, len(retired)+len(undrained)+3)
 	for _, p := range retired {
 		errs = append(errs, p.Close())
 		closed = append(closed, p)
@@ -4120,6 +4230,10 @@ func (db *DB) Close() error {
 	// hold the file until drained, so Close must wait for them like every
 	// other pool.
 	closed = append(closed, undrained...)
+	if sr != nil {
+		errs = append(errs, sr.Close())
+		closed = append(closed, sr)
+	}
 	if r != nil {
 		errs = append(errs, r.Close())
 		closed = append(closed, r)
@@ -4184,7 +4298,7 @@ func (db *DB) CloseConnections() error {
 	// every write still sitting in the log.
 	var errs []error
 	closed := make([]*sql.DB, 0,
-		len(db.retired)+len(db.undrainedPools)+2)
+		len(db.retired)+len(db.undrainedPools)+3)
 	for _, p := range db.retired {
 		errs = append(errs, p.Close())
 		closed = append(closed, p)
@@ -4197,6 +4311,11 @@ func (db *DB) CloseConnections() error {
 	r := db.rawReader()
 	errs = append(errs, r.Close())
 	closed = append(closed, r)
+	sr := db.searchReader.Swap(nil)
+	if sr != nil {
+		errs = append(errs, sr.Close())
+		closed = append(closed, sr)
+	}
 	// The writer pool is nil when a worker maintenance pass has it closed.
 	// Guard the close so this lifecycle path can never nil-deref.
 	w := db.rawWriter()
@@ -4301,8 +4420,15 @@ func (db *DB) Reopen() error {
 		return ErrReadOnly
 	}
 	db.mu.Lock()
-	defer db.mu.Unlock()
 	if err := db.reopenLocked(); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	db.mu.Unlock()
+	// Reopen follows an atomic archive swap. Content object IDs can be reused
+	// by the new archive for different immutable bodies, so rowid-set equality
+	// cannot prove the old derived index is valid; rebuild it unconditionally.
+	if err := db.RebuildFTS(); err != nil {
 		return err
 	}
 	db.startWALCheckpointLoop()
@@ -4314,7 +4440,7 @@ func (db *DB) Reopen() error {
 // so the struct never points at closed handles on failure.
 func (db *DB) reopenLocked() error {
 	writer, err := sql.Open(
-		"sqlite3", makeDSN(db.path, false),
+		sqliteDriverName, makeDSN(db.path, false),
 	)
 	if err != nil {
 		return fmt.Errorf("reopening writer: %w", err)
@@ -4323,6 +4449,10 @@ func (db *DB) reopenLocked() error {
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
+	}
+	if err := attachSearchWriter(writer, db.searchPath); err != nil {
+		writer.Close()
+		return err
 	}
 
 	reader, err := sql.Open(
@@ -4333,11 +4463,18 @@ func (db *DB) reopenLocked() error {
 		return fmt.Errorf("reopening reader: %w", err)
 	}
 	configureReaderPool(reader)
+	searchReader, err := openSearchReader(db.path, db.searchPath)
+	if err != nil {
+		writer.Close()
+		reader.Close()
+		return err
+	}
 
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
+	oldSearchReader := db.searchReader.Swap(searchReader)
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set. Without this a resync swap that ran behind the
 	// worker write barrier would reopen the pool yet keep rejecting writes.
@@ -4355,6 +4492,9 @@ func (db *DB) reopenLocked() error {
 	}
 	if oldReader != nil {
 		freshRetired = append(freshRetired, oldReader)
+	}
+	if oldSearchReader != nil {
+		freshRetired = append(freshRetired, oldSearchReader)
 	}
 	db.retired = freshRetired
 	db.connMu.Unlock()
@@ -4453,6 +4593,10 @@ func (db *DB) ReopenWriter() error {
 	if err := configureWAL(writer); err != nil {
 		writer.Close()
 		return fmt.Errorf("configuring reopened wal: %w", err)
+	}
+	if err := attachSearchWriter(writer, db.searchPath); err != nil {
+		writer.Close()
+		return err
 	}
 
 	db.connMu.Lock()

@@ -157,8 +157,8 @@ func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
 func assertNoFTSLeak(t *testing.T, d *DB, token string) {
 	t.Helper()
 	var leaked int
-	err := d.getReader().QueryRow(
-		`SELECT count(*) FROM content_fts
+	err := d.getSearchReader().QueryRow(
+		`SELECT count(*) FROM search_index.content_fts
 		 WHERE content_fts MATCH ?`,
 		token,
 	).Scan(&leaked)

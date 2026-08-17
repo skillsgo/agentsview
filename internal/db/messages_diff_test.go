@@ -120,8 +120,8 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 
 	if d.HasFTS() {
 		var n int
-		require.NoError(t, d.getReader().QueryRow(
-			`SELECT count(*) FROM content_fts
+		require.NoError(t, d.getSearchReader().QueryRow(
+			`SELECT count(*) FROM search_index.content_fts
 			 WHERE content_fts MATCH 'zqmergetoken'`,
 		).Scan(&n))
 		assert.Equal(t, 1, n,

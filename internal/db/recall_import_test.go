@@ -493,7 +493,7 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	require.NoError(t, err)
 	defer encoder.Close()
 	changedObjectID, err := putAgentContentTx(
-		rewrite, encoder, "The evidence changed before import commit.",
+		rewrite, encoder, "The evidence changed before import commit.", true,
 	)
 	require.NoError(t, err)
 	_, err = rewrite.Exec(`

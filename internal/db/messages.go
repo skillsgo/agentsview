@@ -2642,7 +2642,7 @@ func applyToolCallSubagentLinkTx(
 		return false, fmt.Errorf("creating Agent content encoder: %w", err)
 	}
 	defer encoder.Close()
-	resultObjectID, err := putAgentContentTx(tx, encoder, resultContent)
+	resultObjectID, err := putAgentContentTx(tx, encoder, resultContent, false)
 	if err != nil {
 		return false, err
 	}

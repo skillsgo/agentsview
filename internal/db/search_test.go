@@ -693,7 +693,7 @@ func TestSearchDeduplicationManyMessages(t *testing.T) {
 	// second segment, reproducing the multi-segment state that caused the outer
 	// JOIN to return duplicate rows before the MATCH clause was added.
 	_, err := d.getWriter().Exec(
-		"INSERT INTO content_fts(content_fts) VALUES('optimize')",
+		"INSERT INTO search_index.content_fts(content_fts) VALUES('optimize')",
 	)
 	require.NoError(t, err, "fts optimize")
 	extra := make([]Message, 20)
@@ -876,10 +876,10 @@ func TestSearchSession(t *testing.T) {
 			want:      []int{0, 1},
 		},
 		{
-			name:      "match in tool result_content only — message content has no match",
+			name:      "tool result content is excluded from default session search",
 			sessionID: "s1",
 			query:     "uniquetooloutput",
-			want:      []int{4},
+			want:      []int{},
 		},
 		{
 			name:      "tool result match is scoped to correct session",

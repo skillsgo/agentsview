@@ -366,7 +366,7 @@ func (db *DB) Search(
 		"content_fts MATCH ?",
 		"s2.deleted_at IS NULL",
 		"m2.is_system = 0",
-		SystemPrefixSQL("content_fts.content", "m2.role"),
+		"m2.role IN ('user', 'assistant')",
 	}
 	ftsArgs := []any{f.Query} // args for one copy of innerWhere
 
@@ -421,18 +421,17 @@ func (db *DB) Search(
 
 	query := fmt.Sprintf(`
 		SELECT session_id, project, agent, name,
-			session_ended_at, ordinal, snippet, rank, match_pos
+			session_ended_at, ordinal, snippet, rank, match_pos, content_id
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
 				best.best_ordinal AS ordinal,
-				snippet(content_fts, 0, '<mark>', '</mark>',
-					'...', %d) AS snippet,
+				'' AS snippet,
 				best.best_rank AS rank,
-				instr(LOWER(content_fts.content), LOWER(best.best_query))
-					AS match_pos
+				0 AS match_pos,
+				best.best_content_id AS content_id
 			FROM (
 				SELECT session_id, best_message_id, best_content_id,
 					best_ordinal, best_rank, best_query
@@ -448,14 +447,14 @@ func (db *DB) Search(
 							ORDER BY rank ASC, m2.ordinal ASC,
 								m2.id ASC
 						) AS rn
-					FROM content_fts
+					FROM search_index.content_fts
 					JOIN messages m2 ON m2.content_object_id = content_fts.rowid
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE %s
 				)
 				WHERE rn = 1
 			) AS best
-			JOIN content_fts ON content_fts.rowid = best.best_content_id
+			JOIN search_index.content_fts ON content_fts.rowid = best.best_content_id
 			JOIN messages m ON m.id = best.best_message_id
 			JOIN sessions s ON m.session_id = s.id
 			WHERE content_fts MATCH ?
@@ -475,23 +474,24 @@ func (db *DB) Search(
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				0.0 AS rank,
-				0 AS match_pos
+				0 AS match_pos,
+				NULL AS content_id
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (
 					SELECT 1 FROM messages mx
-					JOIN content_fts mx_content
+					JOIN search_index.content_fts mx_content
 					  ON mx_content.rowid = mx.content_object_id
 					WHERE mx.session_id = s.id
 					  AND mx.is_system = 0
-					  AND `+SystemPrefixSQL("mx_content.content", "mx.role")+`
+					  AND mx.role IN ('user', 'assistant')
 				)
 				%s
 				AND s.id NOT IN (
 					SELECT m2.session_id
-					FROM content_fts
+					FROM search_index.content_fts
 					JOIN messages m2 ON m2.content_object_id = content_fts.rowid
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE %s
@@ -499,7 +499,6 @@ func (db *DB) Search(
 		)
 		ORDER BY %s
 		LIMIT ? OFFSET ?`,
-		snippetTokenLength,
 		innerWhereSQL,     // ROW_NUMBER inner WHERE (%s at rn subquery)
 		nameProjectClause, // optional project filter for name branch (%s)
 		innerWhereSQL,     // NOT IN subquery WHERE (%s)
@@ -518,7 +517,7 @@ func (db *DB) Search(
 	args2 = append(args2, args...)
 	args = args2
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := db.getSearchReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return SearchPage{}, fmt.Errorf("searching: %w", err)
 	}
@@ -528,13 +527,24 @@ func (db *DB) Search(
 	for rows.Next() {
 		var r SearchResult
 		var matchPos int
+		var contentID sql.NullInt64
 		if err := rows.Scan(
 			&r.SessionID, &r.Project, &r.Agent, &r.Name,
 			&r.SessionEndedAt, &r.Ordinal,
-			&r.Snippet, &r.Rank, &matchPos,
+			&r.Snippet, &r.Rank, &matchPos, &contentID,
 		); err != nil {
 			return SearchPage{},
 				fmt.Errorf("scanning result: %w", err)
+		}
+		if contentID.Valid {
+			body, readErr := readAgentContent(ctx,
+				func(query string, args ...any) rowScanner {
+					return db.getReader().QueryRowContext(ctx, query, args...)
+				}, contentID.Int64)
+			if readErr != nil {
+				return SearchPage{}, readErr
+			}
+			r.Snippet = searchResultSnippet(body, plainQuery)
 		}
 		results = append(results, r)
 	}
@@ -567,13 +577,11 @@ func (db *DB) SearchSession(
 		role     string
 		isSystem bool
 		message  sql.NullInt64
-		result   sql.NullInt64
 	}
 	rows, err := db.getReader().QueryContext(ctx, `SELECT m.ordinal, m.role,
-		m.is_system, m.content_object_id, tc.result_object_id
+		m.is_system, m.content_object_id
 		FROM messages m
-		LEFT JOIN tool_calls tc ON tc.message_id = m.id
-		WHERE m.session_id = ? ORDER BY m.ordinal, tc.id`, sessionID)
+		WHERE m.session_id = ? ORDER BY m.ordinal`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)
 	}
@@ -582,16 +590,13 @@ func (db *DB) SearchSession(
 	for rows.Next() {
 		var candidate searchRow
 		if err := rows.Scan(&candidate.ordinal, &candidate.role,
-			&candidate.isSystem, &candidate.message, &candidate.result); err != nil {
+			&candidate.isSystem, &candidate.message); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scanning session search row: %w", err)
 		}
 		candidates = append(candidates, candidate)
 		if candidate.message.Valid {
 			objectIDs = append(objectIDs, candidate.message.Int64)
-		}
-		if candidate.result.Valid {
-			objectIDs = append(objectIDs, candidate.result.Int64)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -619,12 +624,7 @@ func (db *DB) SearchSession(
 		if IsSystemPrefixed(message, candidate.role) {
 			continue
 		}
-		result := ""
-		if candidate.result.Valid {
-			result = contents[candidate.result.Int64]
-		}
-		if !strings.Contains(strings.ToLower(message), needle) &&
-			!strings.Contains(strings.ToLower(result), needle) {
+		if !strings.Contains(strings.ToLower(message), needle) {
 			continue
 		}
 		if _, exists := seen[candidate.ordinal]; exists {
@@ -634,6 +634,25 @@ func (db *DB) SearchSession(
 		ordinals = append(ordinals, candidate.ordinal)
 	}
 	return ordinals, nil
+}
+
+func searchResultSnippet(body, query string) string {
+	start, end := FTSSnippetRange(query, body)
+	if end <= start {
+		return body
+	}
+	const contextBytes = 160
+	left := max(0, start-contextBytes)
+	right := min(len(body), end+contextBytes)
+	prefix, suffix := "", ""
+	if left > 0 {
+		prefix = "..."
+	}
+	if right < len(body) {
+		suffix = "..."
+	}
+	return prefix + body[left:start] + "<mark>" + body[start:end] +
+		"</mark>" + body[end:right] + suffix
 }
 
 // PrepareFTSQuery turns a user's raw search input into a well-formed SQLite

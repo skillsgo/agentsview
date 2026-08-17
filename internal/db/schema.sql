@@ -119,7 +119,8 @@ CREATE TABLE IF NOT EXISTS content_objects (
     raw_size    INTEGER NOT NULL CHECK (raw_size > 0),
     codec       INTEGER NOT NULL,
     payload     BLOB NOT NULL,
-    ref_count   INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0)
+    ref_count   INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0),
+    searchable  INTEGER NOT NULL DEFAULT 0 CHECK (searchable IN (0, 1))
 );
 
 -- Messages table with ordinal for efficient range queries

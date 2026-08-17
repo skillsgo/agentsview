@@ -110,30 +110,33 @@ func prepareAgentContentRefsTx(tx *sql.Tx, messages []Message) error {
 		message := &messages[messageIndex]
 		if message.contentObjectID, err = putAgentContentTx(
 			tx, encoder, message.Content,
+			!message.IsSystem &&
+				(message.Role == "user" || message.Role == "assistant") &&
+				!IsSystemPrefixed(message.Content, message.Role),
 		); err != nil {
 			return fmt.Errorf("storing message content: %w", err)
 		}
 		if message.thinkingObjectID, err = putAgentContentTx(
-			tx, encoder, message.ThinkingText,
+			tx, encoder, message.ThinkingText, false,
 		); err != nil {
 			return fmt.Errorf("storing message thinking: %w", err)
 		}
 		for callIndex := range message.ToolCalls {
 			call := &message.ToolCalls[callIndex]
 			if call.inputObjectID, err = putAgentContentTx(
-				tx, encoder, call.InputJSON,
+				tx, encoder, call.InputJSON, true,
 			); err != nil {
 				return fmt.Errorf("storing tool input: %w", err)
 			}
 			if call.resultObjectID, err = putAgentContentTx(
-				tx, encoder, call.ResultContent,
+				tx, encoder, call.ResultContent, false,
 			); err != nil {
 				return fmt.Errorf("storing tool result: %w", err)
 			}
 			for eventIndex := range call.ResultEvents {
 				event := &call.ResultEvents[eventIndex]
 				if event.contentObjectID, err = putAgentContentTx(
-					tx, encoder, event.Content,
+					tx, encoder, event.Content, false,
 				); err != nil {
 					return fmt.Errorf("storing tool result event: %w", err)
 				}
@@ -144,7 +147,7 @@ func prepareAgentContentRefsTx(tx *sql.Tx, messages []Message) error {
 }
 
 func putAgentContentTx(
-	tx *sql.Tx, encoder *zstd.Encoder, content string,
+	tx *sql.Tx, encoder *zstd.Encoder, content string, searchable bool,
 ) (*int64, error) {
 	if content == "" {
 		return nil, nil
@@ -161,6 +164,16 @@ func putAgentContentTx(
 		); err != nil {
 			return nil, fmt.Errorf("reserving Agent content reference: %w", err)
 		}
+		if searchable {
+			if _, err := tx.Exec(
+				"UPDATE content_objects SET searchable = 1 WHERE id = ?", id,
+			); err != nil {
+				return nil, fmt.Errorf("marking Agent content searchable: %w", err)
+			}
+			if err := projectAgentContentTx(tx, id, content); err != nil {
+				return nil, err
+			}
+		}
 		return &id, nil
 	}
 	if err != sql.ErrNoRows {
@@ -168,8 +181,8 @@ func putAgentContentTx(
 	}
 	codec, payload := encodeContent(encoder, raw)
 	result, err := tx.Exec(`INSERT OR IGNORE INTO content_objects
-		(digest, raw_size, codec, payload, ref_count) VALUES (?, ?, ?, ?, 1)`,
-		digest[:], len(raw), codec, payload)
+		(digest, raw_size, codec, payload, ref_count, searchable)
+		VALUES (?, ?, ?, ?, 1, ?)`, digest[:], len(raw), codec, payload, searchable)
 	if err != nil {
 		return nil, fmt.Errorf("inserting Agent content: %w", err)
 	}
@@ -178,8 +191,10 @@ func putAgentContentTx(
 		if err != nil {
 			return nil, fmt.Errorf("reading Agent content id: %w", err)
 		}
-		if err := projectAgentContentTx(tx, id, content); err != nil {
-			return nil, err
+		if searchable {
+			if err := projectAgentContentTx(tx, id, content); err != nil {
+				return nil, err
+			}
 		}
 		return &id, nil
 	}
@@ -189,7 +204,8 @@ func putAgentContentTx(
 		return nil, fmt.Errorf("resolving concurrent Agent content: %w", err)
 	}
 	if _, err := tx.Exec(
-		"UPDATE content_objects SET ref_count = ref_count + 1 WHERE id = ?", id,
+		"UPDATE content_objects SET ref_count = ref_count + 1, searchable = max(searchable, ?) WHERE id = ?",
+		searchable, id,
 	); err != nil {
 		return nil, fmt.Errorf("reserving concurrent Agent content reference: %w", err)
 	}
@@ -197,8 +213,16 @@ func putAgentContentTx(
 }
 
 func projectAgentContentTx(tx *sql.Tx, id int64, content string) error {
+	var attached int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_database_list
+		WHERE name = 'search_index'`).Scan(&attached); err != nil {
+		return fmt.Errorf("probing Agent content projection database: %w", err)
+	}
+	if attached == 0 {
+		return nil
+	}
 	var exists int
-	if err := tx.QueryRow(`SELECT count(*) FROM sqlite_master
+	if err := tx.QueryRow(`SELECT count(*) FROM search_index.sqlite_schema
 		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
 		return fmt.Errorf("probing Agent content projection: %w", err)
 	}
@@ -206,7 +230,7 @@ func projectAgentContentTx(tx *sql.Tx, id int64, content string) error {
 		return nil
 	}
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO content_fts(rowid, content) VALUES (?, ?)",
+		"INSERT OR REPLACE INTO search_index.content_fts(rowid, content) VALUES (?, ?)",
 		id, content,
 	); err != nil {
 		return fmt.Errorf("projecting Agent content: %w", err)

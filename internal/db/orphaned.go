@@ -1903,8 +1903,16 @@ func refreshAgentContentReferenceCountsTx(ctx context.Context, tx *sql.Tx) error
 func projectCopiedAgentContentsTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
 ) error {
+	var attached int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pragma_database_list
+		WHERE name = 'search_index'`).Scan(&attached); err != nil {
+		return fmt.Errorf("probing copied Agent content projection database: %w", err)
+	}
+	if attached == 0 {
+		return nil
+	}
 	var exists int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM main.sqlite_master
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM search_index.sqlite_schema
 		WHERE type = 'table' AND name = 'content_fts'`).Scan(&exists); err != nil {
 		return fmt.Errorf("probing copied Agent content projection: %w", err)
 	}
@@ -1917,13 +1925,8 @@ func projectCopiedAgentContentsTx(
 		WHERE co.id IN (
 			SELECT content_object_id FROM main.messages
 			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-			UNION SELECT thinking_object_id FROM main.messages
-			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+			   AND is_system = 0 AND role IN ('user', 'assistant')
 			UNION SELECT input_object_id FROM main.tool_calls
-			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-			UNION SELECT result_object_id FROM main.tool_calls
-			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
-			UNION SELECT content_object_id FROM main.tool_result_events
 			 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
 		)`)
 	if err != nil {
@@ -1958,7 +1961,11 @@ func projectCopiedAgentContentsTx(
 	}
 	for _, item := range projections {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT OR REPLACE INTO content_fts(rowid, content) VALUES (?, ?)",
+			"UPDATE content_objects SET searchable = 1 WHERE id = ?", item.id); err != nil {
+			return fmt.Errorf("marking copied Agent content searchable: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR REPLACE INTO search_index.content_fts(rowid, content) VALUES (?, ?)",
 			item.id, item.content); err != nil {
 			return fmt.Errorf("projecting copied Agent content: %w", err)
 		}
