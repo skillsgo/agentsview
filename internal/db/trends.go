@@ -72,16 +72,23 @@ func (db *DB) GetTrendsTerms(
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	flt := f.messageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
+	contentExpr := "m.content"
+	contentJoin := ""
+	if db.hasContentFTS() {
+		contentExpr = "content_fts.content"
+		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
+	}
+	query := fmt.Sprintf(`SELECT m.session_id, m.ordinal, m.role, m.is_system,
+			COALESCE(m.model, ''), %s, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		WHERE ` + where + `
+		%s
+		WHERE `+where+`
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = 0
-			AND ` + SystemPrefixSQL("m.content", "m.role") + `
-		ORDER BY m.session_id, m.ordinal`
+			AND `+SystemPrefixSQL(contentExpr, "m.role")+`
+		ORDER BY m.session_id, m.ordinal`, contentExpr, contentJoin)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {

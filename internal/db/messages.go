@@ -2419,11 +2419,12 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(
 // metadata-only rewrites.
 func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
-		`SELECT ordinal, is_system, has_thinking, has_tool_use,
-			thinking_text
-		 FROM messages
-		 WHERE session_id = ?
-		 ORDER BY ordinal ASC`,
+		`SELECT m.ordinal, m.is_system, m.has_thinking, m.has_tool_use,
+			m.thinking_text, co.digest
+		 FROM messages m
+		 LEFT JOIN content_objects co ON co.id = m.thinking_object_id
+		 WHERE m.session_id = ?
+		 ORDER BY m.ordinal ASC`,
 		sessionID,
 	)
 	if err != nil {
@@ -2436,7 +2437,7 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 		var r flagsFingerprintRow
 		if err := rows.Scan(
 			&r.ordinal, &r.isSystem, &r.hasThinking, &r.hasToolUse,
-			&r.thinkingText,
+			&r.thinkingText, &r.thinkingDigest,
 		); err != nil {
 			return "", err
 		}
@@ -2465,10 +2466,11 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, tc.tool_name, tc.category, tc.tool_use_id,
-			tc.input_json, tc.skill_name, tc.subagent_session_id,
+			tc.input_json, ico.digest, tc.skill_name, tc.subagent_session_id,
 			tc.result_content_length, COALESCE(tc.file_path, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
+		 LEFT JOIN content_objects ico ON ico.id = tc.input_object_id
 		 WHERE tc.session_id = ?
 		 ORDER BY m.ordinal ASC, tc.id ASC`,
 		sessionID,
@@ -2484,9 +2486,10 @@ func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 		var resultLen sql.NullInt64
 		var toolName, category, filePath string
 		var toolUseID, inputJSON, skillName, subagentSessionID sql.NullString
+		var inputDigest []byte
 		if err := rows.Scan(
 			&ordinal, &toolName, &category, &toolUseID,
-			&inputJSON, &skillName, &subagentSessionID, &resultLen,
+			&inputJSON, &inputDigest, &skillName, &subagentSessionID, &resultLen,
 			&filePath,
 		); err != nil {
 			return "", err
@@ -2498,6 +2501,10 @@ func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 		sub := SanitizeUTF8(subagentSessionID.String)
 		fp := SanitizeUTF8(filePath)
 		sum := sha256.Sum256([]byte(SanitizeUTF8(inputJSON.String)))
+		if len(inputDigest) == sha256.Size &&
+			SanitizeUTF8(inputJSON.String) == inputJSON.String {
+			copy(sum[:], inputDigest)
+		}
 		fmt.Fprintf(&b,
 			"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s;",
 			ordinal,

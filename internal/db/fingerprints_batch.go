@@ -667,15 +667,20 @@ func appendRoleTimeFingerprintRow(
 }
 
 type flagsFingerprintRow struct {
-	ordinal      int
-	isSystem     bool
-	hasThinking  bool
-	hasToolUse   bool
-	thinkingText string
+	ordinal        int
+	isSystem       bool
+	hasThinking    bool
+	hasToolUse     bool
+	thinkingText   string
+	thinkingDigest []byte
 }
 
 func (r flagsFingerprintRow) appendTo(b *strings.Builder) {
 	sum := sha256.Sum256([]byte(SanitizeUTF8(r.thinkingText)))
+	if len(r.thinkingDigest) == sha256.Size &&
+		SanitizeUTF8(r.thinkingText) == r.thinkingText {
+		copy(sum[:], r.thinkingDigest)
+	}
 	fmt.Fprintf(b, "%d|%t|%t|%t|%x;",
 		r.ordinal, r.isSystem, r.hasThinking, r.hasToolUse, sum)
 }

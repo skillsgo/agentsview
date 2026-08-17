@@ -95,7 +95,13 @@ func getSessionActivitySQLite(
 
 	// Visible-message filter: exclude persisted system messages and
 	// prefix-detected injected user messages.
-	visibleFilter := "m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
+	contentExpr := "m.content"
+	contentJoin := ""
+	if d.hasContentFTS() {
+		contentExpr = "content_fts.content"
+		contentJoin = "JOIN content_fts ON content_fts.rowid = m.content_object_id"
+	}
+	visibleFilter := "m.is_system = 0 AND " + SystemPrefixSQL(contentExpr, "m.role")
 
 	// Get min and max timestamps from visible messages with valid timestamps.
 	// Use julianday() for sub-second precision — strftime('%s') truncates.
@@ -106,10 +112,11 @@ func getSessionActivitySQLite(
 			MIN((julianday(m.timestamp) - 2440587.5) * 86400.0),
 			MAX((julianday(m.timestamp) - 2440587.5) * 86400.0)
 		FROM messages m
+		%s
 		WHERE m.session_id = ?
 		  AND %s
 		  AND %s`,
-		visibleFilter, tsFilter,
+		contentJoin, visibleFilter, tsFilter,
 	), sessionID).Scan(&minEpoch, &maxEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("querying timestamp range: %w", err)
@@ -140,12 +147,13 @@ func getSessionActivitySQLite(
 			SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END) AS asst_count,
 			MIN(m.ordinal) AS first_ordinal
 		FROM messages m
+		%s
 		WHERE m.session_id = ?
 		  AND %s
 		  AND %s
 		GROUP BY bucket_idx
 		ORDER BY bucket_idx`,
-		visibleFilter, tsFilter,
+		contentJoin, visibleFilter, tsFilter,
 	), epochMin, interval, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity buckets: %w", err)
