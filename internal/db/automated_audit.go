@@ -1,137 +1,67 @@
 package db
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
-
-const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
-
-type boundedAutomationText struct {
-	prefix         sql.RawBytes
-	fullByteLength sql.NullInt64
-}
-
-func (text boundedAutomationText) evidence() AutomationTextEvidence {
-	return AutomationTextEvidence{
-		Prefix:         text.prefix,
-		FullByteLength: text.fullByteLength.Int64,
-		Valid:          text.fullByteLength.Valid,
-	}
-}
 
 func auditAutomatedFull(
 	w *writerHandle,
 	patterns automationPatternSnapshot,
 ) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(
-		`SELECT
-			s.id,
-			s.first_message,
-			s.user_message_count,
-			s.is_automated,
-			(
-				SELECT m.content
-				FROM messages m
-				WHERE m.session_id = s.id
-				  AND m.role = 'user'
-				  AND m.is_system = 0
-				  AND TRIM(m.content) <> ''
-				ORDER BY m.ordinal
-				LIMIT 1
-			) AS first_user_message
-		 FROM sessions s`,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"querying automated backfill candidates: %w", err,
-		)
-	}
-
-	setIDs, clearIDs, err = scanFullAutomationCandidates(rows, patterns)
-	if closeErr := rows.Close(); err == nil && closeErr != nil {
-		err = closeErr
-	}
-	return setIDs, clearIDs, err
+	return auditAutomatedFromAgentContent(w, patterns)
 }
 
+// Matching-hash audits used to inspect an inline byte prefix and fetch the
+// full text only for ambiguous rows. Compressed objects cannot expose a prefix
+// without decoding, so the authoritative-object pass is simpler and exact. It
+// reads only one user body per session and deduplicates shared object decoding.
 func auditAutomatedMatchingHash(
 	w *writerHandle,
 	patterns automationPatternSnapshot,
 ) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(
-		`SELECT
-			s.id,
-			s.user_message_count,
-			s.is_automated,
-			substr(CAST(first_user.content AS BLOB), 1, ?)
-				AS first_user_prefix,
-			octet_length(first_user.content) AS first_user_length,
-			CASE
-				WHEN s.user_message_count <= 1
-				 AND s.first_message IS NOT NULL
-				THEN substr(CAST(s.first_message AS BLOB), 1, ?)
-			END AS first_message_prefix,
-			CASE
-				WHEN s.user_message_count <= 1
-				 AND s.first_message IS NOT NULL
-				THEN octet_length(s.first_message)
-			END AS first_message_length
-		 FROM sessions s
-		 LEFT JOIN messages first_user ON first_user.id =
-			CASE WHEN s.user_message_count <= 1 THEN (
-				SELECT m.id
-				FROM messages m
-				WHERE m.session_id = s.id
-				  AND m.role = 'user'
-				  AND m.is_system = 0
-				  AND TRIM(m.content) <> ''
-				ORDER BY m.ordinal
-				LIMIT 1
-			) END`,
-		automationAuditPrefixBytes,
-		automationAuditPrefixBytes,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"querying bounded automated audit candidates: %w", err,
-		)
+	type boundedCandidate struct {
+		id               string
+		userMessageCount int
+		rowAutomated     bool
+		firstUserID      sql.NullInt64
+		firstMessage     AutomationTextEvidence
 	}
-
-	var unresolved []string
+	rows, err := w.Query(`SELECT s.id, s.user_message_count, s.is_automated,
+		(SELECT m.content_object_id FROM messages m
+		 WHERE m.session_id = s.id AND m.role = 'user' AND m.is_system = 0
+		   AND m.content_object_id IS NOT NULL ORDER BY m.ordinal LIMIT 1),
+		substr(CAST(s.first_message AS BLOB), 1, ?),
+		octet_length(s.first_message)
+		FROM sessions s`, AutomationEvidencePrefixBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	var candidates []boundedCandidate
+	var objectIDs []int64
 	for rows.Next() {
-		var (
-			id               string
-			userMessageCount int
-			rowAutomated     bool
-			firstUser        boundedAutomationText
-			firstMessage     boundedAutomationText
-		)
-		if err := rows.Scan(
-			&id,
-			&userMessageCount,
-			&rowAutomated,
-			&firstUser.prefix,
-			&firstUser.fullByteLength,
-			&firstMessage.prefix,
-			&firstMessage.fullByteLength,
-		); err != nil {
+		var candidate boundedCandidate
+		var prefix []byte
+		var length sql.NullInt64
+		if err := rows.Scan(&candidate.id, &candidate.userMessageCount,
+			&candidate.rowAutomated, &candidate.firstUserID,
+			&prefix, &length); err != nil {
 			_ = rows.Close()
-			return nil, nil, fmt.Errorf(
-				"scanning bounded automated audit candidate: %w", err,
-			)
+			return nil, nil, fmt.Errorf("scanning bounded automated audit candidate: %w", err)
 		}
-
-		want, conclusive := patterns.verdictFromEvidence(
-			userMessageCount, firstUser.evidence(), firstMessage.evidence(),
-		)
-		if !conclusive {
-			unresolved = append(unresolved, id)
-			continue
+		candidate.firstMessage = AutomationTextEvidence{
+			Prefix: prefix, FullByteLength: length.Int64, Valid: length.Valid,
 		}
-		setIDs, clearIDs = appendAutomationFlagChange(
-			setIDs, clearIDs, id, rowAutomated, want,
-		)
+		candidates = append(candidates, candidate)
+		if candidate.userMessageCount <= 1 && candidate.firstUserID.Valid {
+			objectIDs = append(objectIDs, candidate.firstUserID.Int64)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -140,83 +70,207 @@ func auditAutomatedMatchingHash(
 	if err := rows.Close(); err != nil {
 		return nil, nil, err
 	}
-
-	err = queryChunked(unresolved, func(ids []string) error {
-		placeholders, args := inPlaceholders(ids)
-		fullRows, err := w.Query(
-			`SELECT
-				s.id,
-				s.first_message,
-				s.user_message_count,
-				s.is_automated,
-				(
-					SELECT m.content
-					FROM messages m
-					WHERE m.session_id = s.id
-					  AND m.role = 'user'
-					  AND m.is_system = 0
-					  AND TRIM(m.content) <> ''
-					ORDER BY m.ordinal
-					LIMIT 1
-				) AS first_user_message
-			 FROM sessions s
-			 WHERE s.id IN `+placeholders,
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"querying unresolved automated audit candidates: %w", err,
-			)
-		}
-		batchSet, batchClear, scanErr := scanFullAutomationCandidates(
-			fullRows, patterns,
-		)
-		if closeErr := fullRows.Close(); scanErr == nil && closeErr != nil {
-			scanErr = closeErr
-		}
-		if scanErr != nil {
-			return scanErr
-		}
-		setIDs = append(setIDs, batchSet...)
-		clearIDs = append(clearIDs, batchClear...)
-		return nil
-	})
+	evidence, err := loadAgentContentEvidence(w, objectIDs)
 	if err != nil {
 		return nil, nil, err
+	}
+	var unresolvedIDs []string
+	for _, candidate := range candidates {
+		var firstUser AutomationTextEvidence
+		if candidate.firstUserID.Valid {
+			firstUser = evidence[candidate.firstUserID.Int64]
+		}
+		want, conclusive := patterns.verdictFromEvidence(
+			candidate.userMessageCount, firstUser, candidate.firstMessage,
+		)
+		if !conclusive {
+			unresolvedIDs = append(unresolvedIDs, candidate.id)
+			continue
+		}
+		setIDs, clearIDs = appendAutomationFlagChange(
+			setIDs, clearIDs, candidate.id, candidate.rowAutomated, want,
+		)
+	}
+	unresolved, err := queryAutomationCandidates(w, unresolvedIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	batchSet, batchClear, err := classifyAutomationCandidates(w, patterns, unresolved)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(setIDs, batchSet...), append(clearIDs, batchClear...), nil
+}
+
+type automationCandidate struct {
+	id               string
+	firstMessage     sql.NullString
+	userMessageCount int
+	rowAutomated     bool
+	firstUserID      sql.NullInt64
+}
+
+// auditAutomatedFromAgentContent classifies sessions from the authoritative
+// compressed first-user body. first_message remains a deliberately small UI
+// summary; full Agent bodies are never read from normalized inline columns.
+func auditAutomatedFromAgentContent(
+	w *writerHandle,
+	patterns automationPatternSnapshot,
+) (setIDs, clearIDs []string, err error) {
+	candidates, err := queryAutomationCandidates(w, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return classifyAutomationCandidates(w, patterns, candidates)
+}
+
+func queryAutomationCandidates(
+	w *writerHandle, ids []string,
+) ([]automationCandidate, error) {
+	where := ""
+	var args []any
+	if ids != nil {
+		if len(ids) == 0 {
+			return nil, nil
+		}
+		where, args = inPlaceholders(ids)
+		where = " WHERE s.id IN " + where
+	}
+	rows, err := w.Query(`SELECT
+			s.id, s.first_message, s.user_message_count, s.is_automated,
+			(SELECT m.content_object_id
+			 FROM messages m
+			 WHERE m.session_id = s.id
+			   AND m.role = 'user'
+			   AND m.is_system = 0
+			   AND m.content_object_id IS NOT NULL
+			 ORDER BY m.ordinal
+			 LIMIT 1)
+		FROM sessions s`+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"querying automated backfill candidates: %w", err,
+		)
+	}
+	var candidates []automationCandidate
+	var objectIDs []int64
+	for rows.Next() {
+		var candidate automationCandidate
+		if err := rows.Scan(
+			&candidate.id, &candidate.firstMessage,
+			&candidate.userMessageCount, &candidate.rowAutomated,
+			&candidate.firstUserID,
+		); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf(
+				"scanning automated audit candidate: %w", err,
+			)
+		}
+		candidates = append(candidates, candidate)
+		if candidate.firstUserID.Valid {
+			objectIDs = append(objectIDs, candidate.firstUserID.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
+}
+
+func classifyAutomationCandidates(
+	w *writerHandle,
+	patterns automationPatternSnapshot,
+	candidates []automationCandidate,
+) (setIDs, clearIDs []string, err error) {
+	var objectIDs []int64
+	for _, candidate := range candidates {
+		if candidate.firstUserID.Valid {
+			objectIDs = append(objectIDs, candidate.firstUserID.Int64)
+		}
+	}
+	contents, err := loadAgentContents(context.Background(), w, objectIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, candidate := range candidates {
+		var firstUser sql.NullString
+		if candidate.firstUserID.Valid {
+			firstUser = sql.NullString{
+				String: contents[candidate.firstUserID.Int64], Valid: true,
+			}
+		}
+		want := patterns.matchesTextCandidates(
+			candidate.userMessageCount, firstUser, candidate.firstMessage,
+		)
+		setIDs, clearIDs = appendAutomationFlagChange(
+			setIDs, clearIDs, candidate.id, candidate.rowAutomated, want,
+		)
 	}
 	return setIDs, clearIDs, nil
 }
 
-func scanFullAutomationCandidates(
-	rows *sql.Rows,
-	patterns automationPatternSnapshot,
-) (setIDs, clearIDs []string, err error) {
-	for rows.Next() {
-		var (
-			id           string
-			firstMessage sql.NullString
-			firstUser    sql.NullString
-			userCount    int
-			rowAutomated bool
-		)
-		if err := rows.Scan(
-			&id, &firstMessage, &userCount, &rowAutomated, &firstUser,
-		); err != nil {
-			return nil, nil, fmt.Errorf(
-				"scanning automated audit candidate: %w", err,
-			)
+func loadAgentContentEvidence(
+	w *writerHandle, ids []int64,
+) (map[int64]AutomationTextEvidence, error) {
+	result := make(map[int64]AutomationTextEvidence, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	unique := make(map[int64]struct{}, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	marks := make([]string, 0, len(ids))
+	args = append(args, AutomationEvidencePrefixBytes)
+	for _, id := range ids {
+		if _, exists := unique[id]; exists {
+			continue
 		}
-		want := patterns.matchesTextCandidates(
-			userCount, firstUser, firstMessage,
-		)
-		setIDs, clearIDs = appendAutomationFlagChange(
-			setIDs, clearIDs, id, rowAutomated, want,
-		)
+		unique[id] = struct{}{}
+		marks = append(marks, "?")
+		args = append(args, id)
+	}
+	rows, err := w.Query(`SELECT id, raw_size, codec,
+		CASE WHEN codec = 0 THEN substr(payload, 1, ?) ELSE payload END
+		FROM content_objects WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying Agent content evidence: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var rawSize, codec int
+		var payload []byte
+		if err := rows.Scan(&id, &rawSize, &codec, &payload); err != nil {
+			return nil, fmt.Errorf("scanning Agent content evidence: %w", err)
+		}
+		prefix := payload
+		if codec == contentCodecZstd {
+			decoder, err := zstd.NewReader(bytes.NewReader(payload), zstd.WithDecoderConcurrency(1))
+			if err != nil {
+				return nil, fmt.Errorf("opening Agent content evidence %d: %w", id, err)
+			}
+			prefix, err = io.ReadAll(io.LimitReader(decoder, AutomationEvidencePrefixBytes))
+			decoder.Close()
+			if err != nil {
+				return nil, fmt.Errorf("decoding Agent content evidence %d: %w", id, err)
+			}
+		} else if codec != contentCodecRaw {
+			return nil, fmt.Errorf("unknown Agent content codec %d", codec)
+		}
+		result[id] = AutomationTextEvidence{
+			Prefix: prefix, FullByteLength: int64(rawSize), Valid: true,
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return setIDs, clearIDs, nil
+	if len(result) != len(unique) {
+		return nil, fmt.Errorf("Agent content evidence reference is missing")
+	}
+	return result, nil
 }
 
 func appendAutomationFlagChange(
