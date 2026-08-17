@@ -220,6 +220,20 @@ func (db *DB) searchContentSubstring(
 
 	var branches []string
 	var args []any
+	messageContent, messageJoin := "m.content", ""
+	inputContent, inputJoin := "tc.input_json", ""
+	resultContent, resultJoin := "tc.result_content", ""
+	eventContent, eventJoin := "tre.content", ""
+	if db.hasContentFTS() {
+		messageContent = "COALESCE(message_content.content, m.content)"
+		messageJoin = "LEFT JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+		inputContent = "COALESCE(input_content.content, tc.input_json)"
+		inputJoin = "LEFT JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
+		resultContent = "COALESCE(result_content.content, tc.result_content)"
+		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+		eventContent = "COALESCE(event_content.content, tre.content)"
+		eventJoin = "LEFT JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
+	}
 
 	// The snippet column carries the full source field; the snippet is built in
 	// Go (substringSnippet) so secret redaction sees whole secrets, not a window
@@ -231,7 +245,7 @@ func (db *DB) searchContentSubstring(
 		sysPred := "1=1"
 		if f.ExcludeSystem {
 			sysPred = "m.is_system = 0 AND " +
-				SystemPrefixSQL("m.content", "m.role")
+				SystemPrefixSQL(messageContent, "m.role")
 		}
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id, s.project, s.agent, 'message' AS location,
@@ -240,8 +254,9 @@ func (db *DB) searchContentSubstring(
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				0 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE m.content LIKE ? ESCAPE '\' AND %s AND m.%s`,
-			snippetExpr("m.content"), sysPred, scope))
+			%s
+			WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
+			snippetExpr(messageContent), messageJoin, messageContent, sysPred, scope))
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
@@ -255,8 +270,9 @@ func (db *DB) searchContentSubstring(
 			FROM tool_calls tc
 			JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
-			WHERE tc.input_json LIKE ? ESCAPE '\' AND tc.%s`,
-			snippetExpr("tc.input_json"), scope))
+			%s
+			WHERE %s LIKE ? ESCAPE '\' AND tc.%s`,
+			snippetExpr(inputContent), inputJoin, inputContent, scope))
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
@@ -279,13 +295,14 @@ func (db *DB) searchContentSubstring(
 			FROM tool_calls tc
 			JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
-			WHERE tc.result_content LIKE ? ESCAPE '\'
+			%s
+			WHERE %s LIKE ? ESCAPE '\'
 			  AND NOT EXISTS (SELECT 1 FROM tool_result_events tre
 			    WHERE tre.session_id = tc.session_id
 			      AND tre.tool_use_id = tc.tool_use_id
 			      AND tc.tool_use_id <> '')
 			  AND tc.%s`,
-			snippetExpr("tc.result_content"), scope))
+			snippetExpr(resultContent), resultJoin, resultContent, scope))
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
@@ -297,8 +314,9 @@ func (db *DB) searchContentSubstring(
 				3 AS src, tre.id AS row_id
 			FROM tool_result_events tre
 			JOIN sessions s ON s.id = tre.session_id
-			WHERE tre.content LIKE ? ESCAPE '\' AND tre.%s`,
-			snippetExpr("tre.content"), scope))
+			%s
+			WHERE %s LIKE ? ESCAPE '\' AND tre.%s`,
+			snippetExpr(eventContent), eventJoin, eventContent, scope))
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
@@ -442,6 +460,20 @@ func (db *DB) regexCandidateRows(
 	scope, scopeArgs := sessionScopeSubquery(f)
 	var branches []string
 	var args []any
+	messageContent, messageJoin := "m.content", ""
+	inputContent, inputJoin := "tc.input_json", ""
+	resultContent, resultJoin := "tc.result_content", ""
+	eventContent, eventJoin := "tre.content", ""
+	if db.hasContentFTS() {
+		messageContent = "COALESCE(message_content.content, m.content)"
+		messageJoin = "LEFT JOIN content_fts message_content ON message_content.rowid = m.content_object_id"
+		inputContent = "COALESCE(input_content.content, tc.input_json)"
+		inputJoin = "LEFT JOIN content_fts input_content ON input_content.rowid = tc.input_object_id"
+		resultContent = "COALESCE(result_content.content, tc.result_content)"
+		resultJoin = "LEFT JOIN content_fts result_content ON result_content.rowid = tc.result_object_id"
+		eventContent = "COALESCE(event_content.content, tre.content)"
+		eventJoin = "LEFT JOIN content_fts event_content ON event_content.rowid = tre.content_object_id"
+	}
 
 	addLike := func() { args = append(args, "%"+escapeLike(lit)+"%") }
 
@@ -457,65 +489,70 @@ func (db *DB) regexCandidateRows(
 		sysPred := "1=1"
 		if f.ExcludeSystem {
 			sysPred = "m.is_system = 0 AND " +
-				SystemPrefixSQL("m.content", "m.role")
+				SystemPrefixSQL(messageContent, "m.role")
 		}
-		w := prefilterClause("m.content")
+		w := prefilterClause(messageContent)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent, 'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
-				m.content AS body,
+				%s AS body,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				0 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE %s AND %s AND m.%s`, w, sysPred, scope))
+			%s
+			WHERE %s AND %s AND m.%s`, messageContent, messageJoin,
+			w, sysPred, scope))
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_input") {
-		w := prefilterClause("tc.input_json")
+		w := prefilterClause(inputContent)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent, 'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
-				tc.input_json AS body,
+				%s AS body,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				1 AS src, tc.id AS row_id
 			FROM tool_calls tc JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
-			WHERE %s AND tc.%s`, w, scope))
+			%s
+			WHERE %s AND tc.%s`, inputContent, inputJoin, w, scope))
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_result") {
-		w := prefilterClause("tc.result_content")
+		w := prefilterClause(resultContent)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent, 'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
-				tc.result_content AS body,
+				%s AS body,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				2 AS src, tc.id AS row_id
 			FROM tool_calls tc JOIN messages mm ON mm.id = tc.message_id
 			JOIN sessions s ON s.id = tc.session_id
+			%s
 			WHERE %s AND NOT EXISTS (SELECT 1 FROM tool_result_events tre
 			    WHERE tre.session_id = tc.session_id AND tre.tool_use_id = tc.tool_use_id
 			      AND tc.tool_use_id <> '')
-			  AND tc.%s`, w, scope))
+			  AND tc.%s`, resultContent, resultJoin, w, scope))
 		args = append(args, scopeArgs...)
-		wEv := prefilterClause("tre.content")
+		wEv := prefilterClause(eventContent)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
 				s.agent AS agent, 'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
 				COALESCE(tre.timestamp,'') AS ts,
-				tre.content AS body,
+				%s AS body,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				3 AS src, tre.id AS row_id
 			FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-			WHERE %s AND tre.%s`, wEv, scope))
+			%s
+			WHERE %s AND tre.%s`, eventContent, eventJoin, wEv, scope))
 		args = append(args, scopeArgs...)
 	}
 	if len(branches) == 0 {
@@ -619,9 +656,8 @@ func literalPrefix(pattern string) string {
 // failed to load), so both modes report the same capability gate.
 var errFTSUnavailable = errors.New("search: full-text search is unavailable")
 
-// searchContentFTS uses messages_fts for fast tokenized matching over
-// message content only. The caller (service/CLI) guarantees Sources is
-// messages-only for fts mode.
+// searchContentFTS matches each unique content object once, then joins the
+// matching object back to every message reference.
 func (db *DB) searchContentFTS(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
@@ -629,24 +665,26 @@ func (db *DB) searchContentFTS(
 	// otherwise raise a generic SQLITE_ERROR that classifyFTSError would misread
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
-	if !db.HasFTS() {
+	if !db.hasContentFTS() {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role")
+		sysPred = "m.is_system = 0 AND " +
+			SystemPrefixSQL("content_fts.content", "m.role")
 	}
 	// Select the full content (not FTS snippet()) so the snippet is built in Go
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent, 'message', m.role, '',
-			m.ordinal, COALESCE(m.timestamp,'') AS ts, m.content AS snippet
-		FROM messages_fts
-		JOIN messages m ON m.id = messages_fts.rowid
+			m.ordinal, COALESCE(m.timestamp,'') AS ts,
+			content_fts.content AS snippet
+		FROM content_fts
+		JOIN messages m ON m.content_object_id = content_fts.rowid
 		JOIN sessions s ON s.id = m.session_id
-		WHERE messages_fts MATCH ? AND %s AND m.%s
-		ORDER BY rank ASC, m.ordinal ASC, m.id ASC
+		WHERE content_fts MATCH ? AND %s AND m.%s
+		ORDER BY content_fts.rank ASC, m.ordinal ASC, m.id ASC
 		LIMIT ? OFFSET ?`, sysPred, scope)
 	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
@@ -705,7 +743,8 @@ func FTSSnippetRange(pattern, body string) (int, int) {
 // carry distinct SQLite codes and pass through unchanged.
 func classifyFTSError(err error) error {
 	if strings.Contains(strings.ToLower(err.Error()), "fts") ||
-		strings.Contains(strings.ToLower(err.Error()), "syntax") {
+		strings.Contains(strings.ToLower(err.Error()), "syntax") ||
+		strings.Contains(strings.ToLower(err.Error()), "unterminated") {
 		return &SearchInputError{
 			Msg: fmt.Sprintf("search: invalid FTS query: %s", err.Error()),
 		}
@@ -1115,13 +1154,14 @@ func (db *DB) fetchHybridFTSBatch(
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
-		       snippet(messages_fts, 0, '', '', '...', 32) AS snip
-		FROM messages_fts f JOIN messages m ON m.id = f.rowid
-		WHERE messages_fts MATCH ? AND m.role IN ('user','assistant')
+		       snippet(content_fts, 0, '', '', '...', 32) AS snip
+		FROM content_fts JOIN messages m
+		  ON m.content_object_id = content_fts.rowid
+		WHERE content_fts MATCH ? AND m.role IN ('user','assistant')
 		  AND m.is_system = 0 AND %s
 		  AND m.%s
-		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
-		SystemPrefixSQL("m.content", "m.role"), scope)
+		ORDER BY content_fts.rank, m.id LIMIT ? OFFSET ?`,
+		SystemPrefixSQL("content_fts.content", "m.role"), scope)
 
 	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
@@ -1364,6 +1404,12 @@ const enrichHitsChunk = maxSQLVars / 2
 func (db *DB) enrichSemanticHits(
 	ctx context.Context, hits []VectorHit,
 ) (map[semanticHitKey]semanticHitInfo, error) {
+	contentExpr := "m.content"
+	contentJoin := ""
+	if db.hasContentFTS() {
+		contentExpr = "content_fts.content"
+		contentJoin = " JOIN content_fts ON content_fts.rowid = m.content_object_id"
+	}
 	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
 	for start := 0; start < len(hits); start += enrichHitsChunk {
 		chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
@@ -1377,12 +1423,12 @@ func (db *DB) enrichSemanticHits(
 		query := "WITH hits(session_id, ordinal) AS (VALUES " +
 			strings.Join(values, ", ") + ") " +
 			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-			"COALESCE(m.timestamp, ''), m.content, " +
+			"COALESCE(m.timestamp, ''), " + contentExpr + ", " +
 			"COALESCE(s.relationship_type, ''), " +
 			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 			"FROM hits h " +
 			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-			"JOIN sessions s ON s.id = m.session_id"
+			"JOIN sessions s ON s.id = m.session_id" + contentJoin
 
 		rows, err := db.getReader().QueryContext(ctx, query, args...)
 		if err != nil {

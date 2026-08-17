@@ -477,6 +477,13 @@ const ClassifierHashKey = "is_automated_classifier_hash"
 //go:embed schema.sql
 var schemaSQL string
 
+const messagesADTriggerDDL = `
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+END;
+`
+
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(
     content,
@@ -493,10 +500,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
+` + messagesADTriggerDDL + `
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
         VALUES('delete', old.id, old.content);

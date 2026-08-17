@@ -1361,10 +1361,35 @@ func sessionHasFTSTx(tx *sql.Tx) (bool, error) {
 func deleteSessionMessageRowsTx(
 	tx *sql.Tx, sessionID string,
 ) error {
+	hasFTS, err := sessionHasFTSTx(tx)
+	if err != nil {
+		return err
+	}
+
+	if hasFTS {
+		if _, err := tx.Exec(
+			`INSERT INTO messages_fts(messages_fts, rowid, content)
+			 SELECT 'delete', id, content
+			 FROM messages WHERE session_id = ?`,
+			sessionID,
+		); err != nil {
+			return fmt.Errorf("bulk-deleting fts entries: %w", err)
+		}
+		if _, err := tx.Exec(
+			"DROP TRIGGER IF EXISTS messages_ad",
+		); err != nil {
+			return fmt.Errorf("dropping messages_ad trigger: %w", err)
+		}
+	}
 	if _, err := tx.Exec(
 		"DELETE FROM messages WHERE session_id = ?", sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old messages: %w", err)
+	}
+	if hasFTS {
+		if _, err := tx.Exec(messagesADTriggerDDL); err != nil {
+			return fmt.Errorf("restoring messages_ad trigger: %w", err)
+		}
 	}
 	return nil
 }
