@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	selectMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text,
+	selectMessageCols = `id, session_id, ordinal, role, content, thinking_text,
+		content_object_id, thinking_object_id,
 		COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
 		is_system,
@@ -29,8 +29,8 @@ const (
 		source_type, source_subtype, prompt_source, source_uuid,
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
-	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text,
+	insertMessageCols = `session_id, ordinal, role, content, thinking_text,
+		content_object_id, thinking_object_id,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
 		model, token_usage, context_tokens, output_tokens,
@@ -186,6 +186,9 @@ func (db *DB) GetMessages(
 	if err != nil {
 		return nil, err
 	}
+	if err := hydrateMessageContents(ctx, db.getReader(), msgs); err != nil {
+		return nil, err
+	}
 	if err := db.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
 	}
@@ -263,6 +266,9 @@ func (db *DB) getMessagesLinearRoleFiltered(
 	if err != nil {
 		return nil, err
 	}
+	if err := hydrateMessageContents(ctx, db.getReader(), msgs); err != nil {
+		return nil, err
+	}
 	if err := db.attachToolCalls(ctx, msgs); err != nil {
 		return nil, err
 	}
@@ -333,7 +339,14 @@ func (db *DB) queryMessageRows(
 		return nil, err
 	}
 	defer rows.Close()
-	return scanMessages(rows)
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageContents(ctx, db.getReader(), msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
 }
 
 // roleFilterClause returns an "AND role IN (...)" clause and its bind
@@ -366,6 +379,9 @@ func (db *DB) GetAllMessages(
 	defer rows.Close()
 	msgs, err := scanMessages(rows)
 	if err != nil {
+		return nil, err
+	}
+	if err := hydrateMessageContents(ctx, db.getReader(), msgs); err != nil {
 		return nil, err
 	}
 	if err := db.attachToolCalls(ctx, msgs); err != nil {
@@ -754,10 +770,9 @@ func insertMessagesTx(
 			ids[start+i] = id
 			args = append(args, id)
 			args = append(args, messageInsertArgs(m)...)
-			args = append(args, m.contentObjectID, m.thinkingObjectID)
 		}
 		query := fmt.Sprintf(
-			"INSERT INTO messages (id, %s, content_object_id, thinking_object_id) VALUES %s",
+			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
 			multiRowPlaceholders(len(batch), 28),
 		)
@@ -812,22 +827,22 @@ func insertToolCallsChunkTx(
 			tc.ToolName, tc.Category,
 			nilIfEmpty(tc.ToolUseID),
 			nilIfEmpty(tc.InputJSON),
+			tc.inputObjectID,
 			nilIfEmpty(tc.SkillName),
 			nilIfZero(tc.ResultContentLength),
 			nilIfEmpty(tc.ResultContent),
+			tc.resultObjectID,
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
 			tc.CallIndex,
-			tc.inputObjectID,
-			tc.resultObjectID,
 		)
 	}
 	query := `
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, skill_name,
-			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index, input_object_id, result_object_id)
+			 tool_use_id, input_json, input_object_id, skill_name,
+			 result_content_length, result_content, result_object_id, subagent_session_id,
+			 file_path, call_index)
 		VALUES ` + multiRowPlaceholders(len(calls), 14)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
@@ -850,18 +865,18 @@ func insertToolResultEventsChunkTx(
 			nilIfEmpty(r.Event.SubagentSessionID),
 			r.Event.Source, r.Event.Status,
 			r.Event.Content,
+			r.Event.contentObjectID,
 			r.Event.ContentLength,
 			nilIfEmpty(r.Event.Timestamp),
 			r.Event.EventIndex,
-			r.Event.contentObjectID,
 		)
 	}
 	query := `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
-			 source, status, content, content_length,
-			 timestamp, event_index, content_object_id)
+			 source, status, content, content_object_id, content_length,
+			 timestamp, event_index)
 		VALUES ` + multiRowPlaceholders(len(rows), 13)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
@@ -1331,37 +1346,10 @@ func sessionHasFTSTx(tx *sql.Tx) (bool, error) {
 func deleteSessionMessageRowsTx(
 	tx *sql.Tx, sessionID string,
 ) error {
-	hasFTS, err := sessionHasFTSTx(tx)
-	if err != nil {
-		return err
-	}
-
-	if hasFTS {
-		// Bulk-delete the FTS entries first so the later row delete
-		// does not re-tokenize large message blobs through messages_ad.
-		if _, err := tx.Exec(
-			`INSERT INTO messages_fts(messages_fts, rowid, content)
-			 SELECT 'delete', id, content
-			 FROM messages WHERE session_id = ?`,
-			sessionID,
-		); err != nil {
-			return fmt.Errorf("bulk-deleting fts entries: %w", err)
-		}
-		if _, err := tx.Exec(
-			"DROP TRIGGER IF EXISTS messages_ad",
-		); err != nil {
-			return fmt.Errorf("dropping messages_ad trigger: %w", err)
-		}
-	}
 	if _, err := tx.Exec(
 		"DELETE FROM messages WHERE session_id = ?", sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old messages: %w", err)
-	}
-	if hasFTS {
-		if _, err := tx.Exec(messagesADTriggerDDL); err != nil {
-			return fmt.Errorf("restoring messages_ad trigger: %w", err)
-		}
 	}
 	return nil
 }
@@ -1508,27 +1496,13 @@ func sessionAutomationStateTx(
 		firstUserMessage sql.NullString
 		userMsgCount     int
 	)
-	err = tx.QueryRow(`
-		SELECT
-			s.first_message,
-			s.user_message_count,
-			s.is_automated,
-			(
-				SELECT m.content
-				FROM messages m
-				WHERE m.session_id = s.id
-				  AND m.role = 'user'
-				  AND m.is_system = 0
-				  AND TRIM(m.content) <> ''
-				ORDER BY m.ordinal
-				LIMIT 1
-			) AS first_user_message
+	err = tx.QueryRow(`SELECT s.first_message, s.user_message_count,
+			s.is_automated
 		FROM sessions s
 		WHERE s.id = ?`,
 		sessionID,
 	).Scan(
-		&firstMessage, &userMsgCount,
-		&rowAutomated, &firstUserMessage,
+		&firstMessage, &userMsgCount, &rowAutomated,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, false, nil
@@ -1538,6 +1512,38 @@ func sessionAutomationStateTx(
 			"reading automation candidate for %s: %w",
 			sessionID, err,
 		)
+	}
+	rows, queryErr := tx.Query(`SELECT content_object_id FROM messages
+		WHERE session_id = ? AND role = 'user' AND is_system = 0
+		  AND content_object_id IS NOT NULL ORDER BY ordinal`, sessionID)
+	if queryErr != nil {
+		return false, false, false, fmt.Errorf(
+			"reading automation messages for %s: %w", sessionID, queryErr)
+	}
+	var contentIDs []int64
+	for rows.Next() {
+		var id int64
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			_ = rows.Close()
+			return false, false, false, scanErr
+		}
+		contentIDs = append(contentIDs, id)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return false, false, false, closeErr
+	}
+	for _, id := range contentIDs {
+		content, readErr := readAgentContent(context.Background(),
+			func(query string, args ...any) rowScanner {
+				return tx.QueryRow(query, args...)
+			}, id)
+		if readErr != nil {
+			return false, false, false, readErr
+		}
+		if strings.TrimSpace(content) != "" {
+			firstUserMessage = sql.NullString{String: content, Valid: true}
+			break
+		}
 	}
 
 	want = isAutomatedFromTextCandidates(
@@ -1868,8 +1874,9 @@ func attachToolCallsBatch(
 
 	query := fmt.Sprintf(`
 		SELECT message_id, session_id, tool_name, category,
-			tool_use_id, input_json, skill_name,
-			result_content_length, result_content, subagent_session_id,
+			tool_use_id, input_json, input_object_id, skill_name,
+			result_content_length, result_content, result_object_id,
+			subagent_session_id,
 			file_path, call_index
 		FROM tool_calls
 		WHERE message_id IN (%s)
@@ -1885,6 +1892,7 @@ func attachToolCallsBatch(
 	for rows.Next() {
 		var tc ToolCall
 		var toolUseID, inputJSON, skillName sql.NullString
+		var inputObjectID, resultObjectID sql.NullInt64
 		var subagentSessionID, resultContent sql.NullString
 		var filePath sql.NullString
 		var resultLen sql.NullInt64
@@ -1892,14 +1900,18 @@ func attachToolCallsBatch(
 		if err := rows.Scan(
 			&tc.MessageID, &tc.SessionID,
 			&tc.ToolName, &tc.Category,
-			&toolUseID, &inputJSON, &skillName,
-			&resultLen, &resultContent, &subagentSessionID,
+			&toolUseID, &inputJSON, &inputObjectID, &skillName,
+			&resultLen, &resultContent, &resultObjectID,
+			&subagentSessionID,
 			&filePath, &callIndex,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
 		if toolUseID.Valid {
 			tc.ToolUseID = toolUseID.String
+		}
+		if inputObjectID.Valid {
+			tc.inputObjectID = &inputObjectID.Int64
 		}
 		if inputJSON.Valid {
 			tc.InputJSON = inputJSON.String
@@ -1909,6 +1921,9 @@ func attachToolCallsBatch(
 		}
 		if resultLen.Valid {
 			tc.ResultContentLength = int(resultLen.Int64)
+		}
+		if resultObjectID.Valid {
+			tc.resultObjectID = &resultObjectID.Int64
 		}
 		if resultContent.Valid {
 			tc.ResultContent = resultContent.String
@@ -1929,7 +1944,39 @@ func attachToolCallsBatch(
 			)
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var contentIDs []int64
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			call := &msgs[i].ToolCalls[j]
+			if call.inputObjectID != nil {
+				contentIDs = append(contentIDs, *call.inputObjectID)
+			}
+			if call.resultObjectID != nil {
+				contentIDs = append(contentIDs, *call.resultObjectID)
+			}
+		}
+	}
+	contents, err := loadAgentContents(ctx, q, contentIDs)
+	if err != nil {
+		return err
+	}
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			call := &msgs[i].ToolCalls[j]
+			if call.inputObjectID != nil {
+				call.InputJSON = contents[*call.inputObjectID]
+			}
+			if call.resultObjectID != nil {
+				call.ResultContent = contents[*call.resultObjectID]
+			}
+			call.inputObjectID = nil
+			call.resultObjectID = nil
+		}
+	}
+	return nil
 }
 
 func attachToolResultEvents(
@@ -1979,7 +2026,7 @@ func attachToolResultEventsBatch(
 	query := fmt.Sprintf(`
 		SELECT tool_call_message_ordinal, call_index,
 			tool_use_id, agent_id, subagent_session_id,
-			source, status, content, content_length,
+			source, status, content, content_object_id, content_length,
 			timestamp, event_index
 		FROM tool_result_events
 		WHERE session_id = ? AND tool_call_message_ordinal IN (%s)
@@ -2005,7 +2052,7 @@ func attachToolResultEventsBatch(
 		if err := rows.Scan(
 			&msgOrdinal, &callIndex,
 			&toolUseID, &agentID, &subID,
-			&ev.Source, &ev.Status, &ev.Content,
+			&ev.Source, &ev.Status, &ev.Content, &ev.contentObjectID,
 			&ev.ContentLength, &timestamp, &ev.EventIndex,
 		); err != nil {
 			return fmt.Errorf("scanning tool_result_event: %w", err)
@@ -2034,7 +2081,36 @@ func attachToolResultEventsBatch(
 			ev,
 		)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var contentIDs []int64
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			for k := range msgs[i].ToolCalls[j].ResultEvents {
+				event := &msgs[i].ToolCalls[j].ResultEvents[k]
+				if event.contentObjectID != nil {
+					contentIDs = append(contentIDs, *event.contentObjectID)
+				}
+			}
+		}
+	}
+	contents, err := loadAgentContents(ctx, q, contentIDs)
+	if err != nil {
+		return err
+	}
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			for k := range msgs[i].ToolCalls[j].ResultEvents {
+				event := &msgs[i].ToolCalls[j].ResultEvents[k]
+				if event.contentObjectID != nil {
+					event.Content = contents[*event.contentObjectID]
+				}
+				event.contentObjectID = nil
+			}
+		}
+	}
+	return nil
 }
 
 func scanMessages(rows *sql.Rows) ([]Message, error) {
@@ -2044,7 +2120,8 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		var tokenUsage string
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &m.Timestamp,
+			&m.Content, &m.ThinkingText,
+			&m.contentObjectID, &m.thinkingObjectID, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
 			&m.Model, &tokenUsage,
@@ -2063,6 +2140,35 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 		msgs = append(msgs, m)
 	}
 	return msgs, rows.Err()
+}
+
+func hydrateMessageContents(
+	ctx context.Context, q messageRowsQuerier, msgs []Message,
+) error {
+	ids := make([]int64, 0, len(msgs)*2)
+	for i := range msgs {
+		if msgs[i].contentObjectID != nil {
+			ids = append(ids, *msgs[i].contentObjectID)
+		}
+		if msgs[i].thinkingObjectID != nil {
+			ids = append(ids, *msgs[i].thinkingObjectID)
+		}
+	}
+	contents, err := loadAgentContents(ctx, q, ids)
+	if err != nil {
+		return err
+	}
+	for i := range msgs {
+		if msgs[i].contentObjectID != nil {
+			msgs[i].Content = contents[*msgs[i].contentObjectID]
+		}
+		if msgs[i].thinkingObjectID != nil {
+			msgs[i].ThinkingText = contents[*msgs[i].thinkingObjectID]
+		}
+		msgs[i].contentObjectID = nil
+		msgs[i].thinkingObjectID = nil
+	}
+	return nil
 }
 
 // MessageCount returns the number of messages for a session.
@@ -2608,7 +2714,8 @@ func (db *DB) GetMessageByOrdinal(
 	var tokenUsage string
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText, &m.Timestamp,
+		&m.Content, &m.ThinkingText,
+		&m.contentObjectID, &m.thinkingObjectID, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
 		&m.Model, &tokenUsage,
@@ -2627,6 +2734,11 @@ func (db *DB) GetMessageByOrdinal(
 	if tokenUsage != "" {
 		m.TokenUsage = json.RawMessage(tokenUsage)
 	}
+	msgs := []Message{m}
+	if err := hydrateMessageContents(context.Background(), db.getReader(), msgs); err != nil {
+		return nil, err
+	}
+	m = msgs[0]
 	return &m, nil
 }
 

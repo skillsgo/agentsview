@@ -18,8 +18,8 @@ const diffDeleteChunkSize = 500
 // so the persisted tuple has exactly one definition.
 func messageInsertArgs(m Message) []any {
 	return []any{
-		m.SessionID, m.Ordinal, m.Role, m.Content,
-		m.ThinkingText,
+		m.SessionID, m.Ordinal, m.Role, m.Content, m.ThinkingText,
+		m.contentObjectID, m.thinkingObjectID,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
 		m.Model, string(m.TokenUsage),
@@ -47,6 +47,8 @@ var messageUpdateSetClause = func() string {
 // Both sides go through the same resolve helpers the insert path
 // uses, so equality is defined on exactly the persisted tuples.
 func messageRowEqual(a, b Message) bool {
+	a.contentObjectID, a.thinkingObjectID = nil, nil
+	b.contentObjectID, b.thinkingObjectID = nil, nil
 	aArgs, bArgs := messageInsertArgs(a), messageInsertArgs(b)
 	for i := range aArgs {
 		if aArgs[i] != bArgs[i] {
@@ -331,15 +333,13 @@ func applySessionMessageDiffTx(
 			return err
 		}
 		updateSQL := "UPDATE messages SET " +
-			messageUpdateSetClause +
-			", content_object_id = ?, thinking_object_id = ? WHERE id = ?"
+			messageUpdateSetClause + " WHERE id = ?"
 		ids := make([]int64, 0, len(plan.updates))
 		ordinals := make([]int, 0, len(plan.updates))
 		msgs := make([]Message, 0, len(plan.updates))
 		for i, u := range plan.updates {
 			message := prepared[i]
-			args := append(messageInsertArgs(message),
-				message.contentObjectID, message.thinkingObjectID, u.id)
+			args := append(messageInsertArgs(message), u.id)
 			if _, err := tx.Exec(updateSQL, args...); err != nil {
 				return fmt.Errorf(
 					"updating message ord=%d: %w",

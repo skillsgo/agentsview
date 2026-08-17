@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -149,4 +150,63 @@ func encodeContent(encoder *zstd.Encoder, raw []byte) (int, []byte) {
 		return contentCodecRaw, raw
 	}
 	return contentCodecZstd, compressed
+}
+
+// loadAgentContents fetches and verifies a set of content objects in one
+// query. Callers use it to hydrate normalized rows without N+1 reads.
+func loadAgentContents(
+	ctx context.Context, q messageRowsQuerier, ids []int64,
+) (map[int64]string, error) {
+	result := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	unique := make(map[int64]struct{}, len(ids))
+	args := make([]any, 0, len(ids))
+	marks := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := unique[id]; exists {
+			continue
+		}
+		unique[id] = struct{}{}
+		args = append(args, id)
+		marks = append(marks, "?")
+	}
+	if len(args) == 0 {
+		return result, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, digest, raw_size, codec, payload
+		FROM content_objects WHERE id IN (`+strings.Join(marks, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying Agent contents: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var digest, payload []byte
+		var rawSize, codec int
+		if err := rows.Scan(&id, &digest, &rawSize, &codec, &payload); err != nil {
+			return nil, fmt.Errorf("scanning Agent content: %w", err)
+		}
+		raw, err := decodeAgentContentPayload(codec, payload)
+		if err != nil {
+			return nil, fmt.Errorf("decoding Agent content %d: %w", id, err)
+		}
+		actual := sha256.Sum256(raw)
+		if len(raw) != rawSize || len(digest) != sha256.Size ||
+			subtle.ConstantTimeCompare(actual[:], digest) != 1 {
+			return nil, fmt.Errorf("Agent content %d failed integrity verification", id)
+		}
+		result[id] = string(raw)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("streaming Agent contents: %w", err)
+	}
+	if len(result) != len(unique) {
+		return nil, fmt.Errorf("Agent content reference is missing")
+	}
+	return result, nil
 }

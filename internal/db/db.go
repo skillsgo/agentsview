@@ -475,19 +475,6 @@ const ClassifierHashKey = "is_automated_classifier_hash"
 //go:embed schema.sql
 var schemaSQL string
 
-// messagesADTriggerDDL is the AFTER DELETE trigger that mirrors row
-// removals into the FTS5 shadow tables. ReplaceSessionMessages drops
-// this trigger inside its transaction (replacing N per-row FTS deletes
-// with a single bulk INSERT...SELECT) and then re-runs this DDL to
-// restore it before commit. Keeping the statement in one place keeps
-// the two installation sites byte-identical.
-const messagesADTriggerDDL = `
-CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, content)
-        VALUES('delete', old.id, old.content);
-END;
-`
-
 const schemaFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
@@ -499,7 +486,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-` + messagesADTriggerDDL + `
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+END;
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
         VALUES('delete', old.id, old.content);
@@ -2527,12 +2517,11 @@ func (db *DB) migrateColumns() error {
 		return err
 	}
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
-		return err
+		return fmt.Errorf("backfilling automated sessions: %w", err)
 	}
 	if err := db.backfillToolCallFieldsLocked(w); err != nil {
-		return err
+		return fmt.Errorf("backfilling tool-call fields: %w", err)
 	}
-
 	if _, err := w.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
 		 ON tool_calls(file_path)
@@ -3195,10 +3184,18 @@ func (db *DB) backfillIsAutomatedLocked(w *writerHandle) error {
 			"probing classifier hash: %w", err,
 		)
 	}
+	err = nil
 
 	patterns := snapshotAutomationPatterns()
 	var setIDs, clearIDs []string
-	if stored == current {
+	var sessionCount int
+	if countErr := w.QueryRow("SELECT count(*) FROM sessions").Scan(&sessionCount); countErr != nil {
+		return fmt.Errorf("counting automated audit candidates: %w", countErr)
+	}
+	if sessionCount == 0 {
+		// A fresh Agent Store has no FTS projection yet; there is nothing to
+		// classify before FTS initialization.
+	} else if stored == current {
 		setIDs, clearIDs, err = auditAutomatedMatchingHash(w, patterns)
 	} else {
 		setIDs, clearIDs, err = auditAutomatedFull(w, patterns)
@@ -3947,8 +3944,7 @@ func (db *DB) DropFTS() error {
 	return nil
 }
 
-// RebuildFTS recreates the FTS table, triggers, and
-// repopulates the index from the messages table.
+// RebuildFTS recreates and repopulates the index from messages.
 func (db *DB) RebuildFTS() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -3957,8 +3953,7 @@ func (db *DB) RebuildFTS() error {
 		return fmt.Errorf("recreate fts: %w", err)
 	}
 	_, err := w.Exec(
-		"INSERT INTO messages_fts(messages_fts)" +
-			" VALUES('rebuild')",
+		"INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
 	)
 	if err != nil {
 		return fmt.Errorf("rebuild fts index: %w", err)

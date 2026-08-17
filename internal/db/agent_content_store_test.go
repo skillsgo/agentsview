@@ -74,3 +74,45 @@ func TestAgentContentStoreSkipsEmptyBodies(t *testing.T) {
 	assert.Nil(t, inputID)
 	assert.Nil(t, resultID)
 }
+
+func TestAgentContentStoreHydratesFromAuthoritativeObjects(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "hydrate-content", "project")
+	require.NoError(t, database.InsertMessages([]Message{{
+		SessionID: "hydrate-content", Ordinal: 0, Role: "assistant",
+		Content: "authoritative message", ThinkingText: "authoritative thought",
+		ToolCalls: []ToolCall{{
+			ToolName: "exec", InputJSON: `{"cmd":"true"}`,
+			ResultContent: "authoritative result",
+			ResultEvents: []ToolResultEvent{{
+				Source: "tool_result", Status: "completed",
+				Content: "authoritative event",
+			}},
+		}},
+	}}))
+
+	_, err := database.getWriter().Exec(
+		"UPDATE messages SET content = 'stale', thinking_text = 'stale'",
+	)
+	require.NoError(t, err)
+	_, err = database.getWriter().Exec(
+		"UPDATE tool_calls SET input_json = 'stale', result_content = 'stale'",
+	)
+	require.NoError(t, err)
+	_, err = database.getWriter().Exec(
+		"UPDATE tool_result_events SET content = 'stale'",
+	)
+	require.NoError(t, err)
+
+	messages, err := database.GetAllMessages(context.Background(), "hydrate-content")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "authoritative message", messages[0].Content)
+	assert.Equal(t, "authoritative thought", messages[0].ThinkingText)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, `{"cmd":"true"}`, messages[0].ToolCalls[0].InputJSON)
+	assert.Equal(t, "authoritative result", messages[0].ToolCalls[0].ResultContent)
+	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "authoritative event",
+		messages[0].ToolCalls[0].ResultEvents[0].Content)
+}

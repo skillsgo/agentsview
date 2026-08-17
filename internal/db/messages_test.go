@@ -442,13 +442,14 @@ func TestMigration_ThinkingTextColumn(t *testing.T) {
 	require.NoError(t, err, "verify column added")
 	require.Equal(t, 1, count, "expected thinking_text column after migration")
 
-	// Verify all rows survive and the legacy row defaults to "".
+	// The content object remains authoritative when an inline compatibility
+	// column is absent; the raw legacy row has no object reference.
 	msgs, err := d2.GetAllMessages(context.Background(), "s1")
 	require.NoError(t, err, "get messages")
 	require.Len(t, msgs, 3)
-	for _, m := range msgs {
-		assert.Empty(t, m.ThinkingText, "ord=%d ThinkingText", m.Ordinal)
-	}
+	assert.Empty(t, msgs[0].ThinkingText)
+	assert.Equal(t, "pre-migration thought", msgs[1].ThinkingText)
+	assert.Empty(t, msgs[2].ThinkingText)
 
 	// Insert a new message with ThinkingText and verify round-trip.
 	insertMessages(t, d2, Message{
