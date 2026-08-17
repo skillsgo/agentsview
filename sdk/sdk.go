@@ -163,9 +163,12 @@ func (a *Archive) StartBackgroundSync(
 		defer close(background.done)
 		failures := 0
 		for backgroundCtx.Err() == nil {
-			err := a.runBackgroundGeneration(backgroundCtx, options, notify, background)
+			reachedRunning, err := a.runBackgroundGeneration(backgroundCtx, options, notify, background)
 			if backgroundCtx.Err() != nil {
 				break
+			}
+			if reachedRunning {
+				failures = 0
 			}
 			failures++
 			background.setStatus("retrying", failures, err)
@@ -186,7 +189,7 @@ func (a *Archive) StartBackgroundSync(
 func (a *Archive) runBackgroundGeneration(
 	ctx context.Context, options BackgroundSyncOptions,
 	notify func(SyncResult, error), background *BackgroundSync,
-) (err error) {
+) (reachedRunning bool, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("sdk: background sync panic: %v", recovered)
@@ -206,7 +209,7 @@ func (a *Archive) runBackgroundGeneration(
 		}, nil, avsync.WatcherOptions{},
 	)
 	if err != nil {
-		return fmt.Errorf("sdk: create archive watcher: %w", err)
+		return false, fmt.Errorf("sdk: create archive watcher: %w", err)
 	}
 	defer watcher.Stop()
 	for _, root := range a.roots {
@@ -215,13 +218,14 @@ func (a *Archive) runBackgroundGeneration(
 		}
 	}
 	if err := watcher.StartCollecting(); err != nil {
-		return fmt.Errorf("sdk: start archive watcher: %w", err)
+		return false, fmt.Errorf("sdk: start archive watcher: %w", err)
 	}
 	result, err := a.Sync(ctx)
 	notify(result, err)
 	if err != nil {
-		return err
+		return false, err
 	}
+	reachedRunning = true
 	background.setStatus("running", 0, nil)
 	watcher.OpenDispatch()
 	ticker := time.NewTicker(options.PollInterval)
@@ -229,14 +233,14 @@ func (a *Archive) runBackgroundGeneration(
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return reachedRunning, ctx.Err()
 		case <-watcher.Done():
-			return errors.New("sdk: archive watcher stopped unexpectedly")
+			return reachedRunning, errors.New("sdk: archive watcher stopped unexpectedly")
 		case <-ticker.C:
 			result, err = a.Sync(ctx)
 			notify(result, err)
 			if err != nil {
-				return err
+				return reachedRunning, err
 			}
 		}
 	}
